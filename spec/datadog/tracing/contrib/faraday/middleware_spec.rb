@@ -106,7 +106,7 @@ RSpec.describe 'Faraday middleware' do
       before do
         # We mock HTTP requests we we can't configure
         # the test adapter for the default connection
-        call_web_mock_function_with_agent_host_exclusions { |options| WebMock.enable! options }
+        WebMock.enable!(allow: agent_url)
         stub_request(:get, /example.com/).to_return(status: 200)
       end
 
@@ -143,6 +143,20 @@ RSpec.describe 'Faraday middleware' do
         subject(:response) { client.get('http://username:password@example.com/success') }
 
         it 'does not collect auth info' do
+          expect(response.status).to eq(200)
+
+          expect(span.get_tag('http.url')).to eq('/success')
+        end
+
+        it 'executes without warnings' do
+          expect { response }.to_not output(/WARNING/).to_stderr
+        end
+      end
+
+      context 'with query sting in url' do
+        subject(:response) { client.get('http://example.com/success?foo=bar') }
+
+        it 'does not collect query string' do
           expect(response.status).to eq(200)
 
           expect(span.get_tag('http.url')).to eq('/success')

@@ -23,8 +23,8 @@ RSpec.describe Datadog::Tracing::Contrib::RestClient::RequestPatch do
       c.tracing.instrument :rest_client, configuration_options
     end
 
-    call_web_mock_function_with_agent_host_exclusions { |options| WebMock.disable_net_connect! options }
-    call_web_mock_function_with_agent_host_exclusions { |options| WebMock.enable! options }
+    WebMock.disable_net_connect!(allow: agent_url)
+    WebMock.enable!(allow: agent_url)
   end
 
   around do |example|
@@ -205,6 +205,20 @@ RSpec.describe Datadog::Tracing::Contrib::RestClient::RequestPatch do
 
         expect(span.get_tag('http.url')).to eq('/sample/path')
         expect(span.get_tag('out.host')).to eq('example.com')
+      end
+    end
+
+    context 'when query string in url' do
+      let(:path) { '/sample/path?foo=bar' }
+
+      before do
+        stub_request(:get, /example.com/).to_return(status: status, body: response)
+      end
+
+      it 'does not collect query string' do
+        request
+
+        expect(span.get_tag('http.url')).to eq('/sample/path')
       end
     end
 

@@ -36,7 +36,7 @@ RSpec.describe Datadog::Profiling::HttpTransport do
       timeout_seconds: nil,
     )
   end
-  let(:adapter) { Datadog::Transport::Ext::HTTP::ADAPTER }
+  let(:adapter) { Datadog::Core::Transport::Ext::HTTP::ADAPTER }
   let(:uds_path) { nil }
   let(:ssl) { false }
   let(:hostname) { '192.168.0.1' }
@@ -55,7 +55,7 @@ RSpec.describe Datadog::Profiling::HttpTransport do
       code_provenance_file_name: code_provenance_file_name,
       code_provenance_data: code_provenance_data,
       tags_as_array: tags_as_array,
-      no_signals_workaround_enabled: true,
+      internal_metadata: { no_signals_workaround_enabled: true },
     )
   end
   let(:start_timestamp) { '2022-02-07T15:59:53.987654321Z' }
@@ -93,7 +93,7 @@ RSpec.describe Datadog::Profiling::HttpTransport do
       end
 
       context 'when agent_settings requests a unix domain socket' do
-        let(:adapter) { Datadog::Transport::Ext::UnixSocket::ADAPTER }
+        let(:adapter) { Datadog::Core::Transport::Ext::UnixSocket::ADAPTER }
         let(:uds_path) { '/var/run/datadog/apm.socket' }
 
         it 'picks the :agent working mode with unix domain stocket reporting' do
@@ -222,18 +222,64 @@ RSpec.describe Datadog::Profiling::HttpTransport do
     end
 
     context 'when failed' do
-      before do
-        expect(described_class).to receive(:_native_do_export).and_return([:ok, 500])
-        allow(Datadog.logger).to receive(:error)
+      context 'with a http status code' do
+        before do
+          expect(described_class).to receive(:_native_do_export).and_return([:ok, 500])
+          allow(Datadog.logger).to receive(:error)
+        end
+
+        it 'logs an error message' do
+          expect(Datadog.logger).to receive(:error).with(
+            'Failed to report profiling data ({:agent=>"http://192.168.0.1:12345/"}): ' \
+            'server returned unexpected HTTP 500 status code'
+          )
+
+          export
+        end
+
+        it { is_expected.to be false }
       end
 
-      it 'logs an error message' do
-        expect(Datadog.logger).to receive(:error)
+      context 'with a failure without an http status code' do
+        before do
+          expect(described_class).to receive(:_native_do_export).and_return([:error, 'Some error message'])
+          allow(Datadog.logger).to receive(:error)
+        end
 
-        export
+        it 'logs an error message' do
+          expect(Datadog.logger).to receive(:error)
+            .with('Failed to report profiling data ({:agent=>"http://192.168.0.1:12345/"}): Some error message')
+
+          export
+        end
+
+        it { is_expected.to be false }
+      end
+    end
+  end
+
+  describe '#config_without_api_key' do
+    subject(:config_without_api_key) { http_transport.send(:config_without_api_key) }
+
+    context 'when using agentless mode' do
+      let(:site) { 'test.datadoghq.com' }
+      let(:api_key) { SecureRandom.uuid }
+
+      around do |example|
+        ClimateControl.modify('DD_PROFILING_AGENTLESS' => 'true') do
+          example.run
+        end
       end
 
-      it { is_expected.to be false }
+      it 'returns the mode and site, but not the api key' do
+        is_expected.to eq(agentless: 'test.datadoghq.com')
+      end
+    end
+
+    context 'when using agent mode' do
+      it 'returns the mode the agent url' do
+        is_expected.to eq(agent: 'http://192.168.0.1:12345/')
+      end
     end
   end
 
@@ -303,8 +349,8 @@ RSpec.describe Datadog::Profiling::HttpTransport do
         body = WEBrick::HTTPUtils.parse_form_data(StringIO.new(request.body), boundary)
         event_data = JSON.parse(body.fetch('event'))
 
-        expect(event_data).to eq(
-          'attachments' => [pprof_file_name, code_provenance_file_name],
+        expect(event_data).to match(
+          'attachments' => contain_exactly(pprof_file_name, code_provenance_file_name),
           'tags_profiler' => 'tag_a:value_a,tag_b:value_b',
           'start' => start_timestamp,
           'end' => end_timestamp,
@@ -323,9 +369,9 @@ RSpec.describe Datadog::Profiling::HttpTransport do
         boundary = request['content-type'][%r{^multipart/form-data; boundary=(.+)}, 1]
         body = WEBrick::HTTPUtils.parse_form_data(StringIO.new(request.body), boundary)
 
-        require 'extlz4' # Lazily required, to avoid trying to load it on JRuby
-
-        expect(LZ4.decode(body.fetch(pprof_file_name))).to eq pprof_data
+        # The pprof data is compressed in the datadog serializer, nothing to do
+        expect(body.fetch(pprof_file_name)).to eq pprof_data
+        # This one needs to be compressed
         expect(LZ4.decode(body.fetch(code_provenance_file_name))).to eq code_provenance_data
       end
     end
@@ -380,7 +426,7 @@ RSpec.describe Datadog::Profiling::HttpTransport do
         server.listeners << unix_domain_socket
         server
       end
-      let(:adapter) { Datadog::Transport::Ext::UnixSocket::ADAPTER }
+      let(:adapter) { Datadog::Core::Transport::Ext::UnixSocket::ADAPTER }
       let(:uds_path) { socket_path }
 
       after do

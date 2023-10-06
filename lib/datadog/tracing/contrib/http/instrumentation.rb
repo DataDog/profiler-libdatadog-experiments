@@ -3,6 +3,7 @@ require 'uri'
 require_relative '../../metadata/ext'
 require_relative '../analytics'
 require_relative '../http_annotation_helper'
+require_relative '../utils/quantization/http'
 
 module Datadog
   module Tracing
@@ -75,12 +76,19 @@ module Datadog
                 )
               end
 
+              # Tag original global service name if not used
+              if span.service != Datadog.configuration.service
+                span.set_tag(Tracing::Contrib::Ext::Metadata::TAG_BASE_SERVICE, Datadog.configuration.service)
+              end
+
               span.set_tag(Tracing::Metadata::Ext::TAG_KIND, Tracing::Metadata::Ext::SpanKind::TAG_CLIENT)
 
               span.set_tag(Tracing::Metadata::Ext::TAG_COMPONENT, Ext::TAG_COMPONENT)
               span.set_tag(Tracing::Metadata::Ext::TAG_OPERATION, Ext::TAG_OPERATION_REQUEST)
-
-              span.set_tag(Tracing::Metadata::Ext::HTTP::TAG_URL, request.path)
+              span.set_tag(
+                Tracing::Metadata::Ext::HTTP::TAG_URL,
+                Contrib::Utils::Quantization::HTTP.url(request.path, { query: { exclude: :all } })
+              )
               span.set_tag(Tracing::Metadata::Ext::HTTP::TAG_METHOD, request.method)
 
               host, port = host_and_port(request)

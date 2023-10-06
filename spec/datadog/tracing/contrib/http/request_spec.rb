@@ -13,7 +13,7 @@ require 'time'
 require 'json'
 
 RSpec.describe 'net/http requests' do
-  before { call_web_mock_function_with_agent_host_exclusions { |options| WebMock.enable! options } }
+  before { WebMock.enable!(allow: agent_url) }
 
   after do
     WebMock.reset!
@@ -267,7 +267,7 @@ RSpec.describe 'net/http requests' do
     end
 
     describe 'integration' do
-      let(:transport) { Datadog::Transport::HTTP.default }
+      let(:transport) { Datadog::Tracing::Transport::HTTP.default }
 
       it 'does not create a span for the transport request' do
         expect(Datadog::Tracing).to_not receive(:trace)
@@ -539,7 +539,7 @@ RSpec.describe 'net/http requests' do
 
   context 'when basic auth in url' do
     before do
-      call_web_mock_function_with_agent_host_exclusions { |options| WebMock.enable! options }
+      WebMock.enable!(allow: agent_url)
       stub_request(:get, /example.com/).to_return(status: 200)
     end
 
@@ -552,6 +552,23 @@ RSpec.describe 'net/http requests' do
 
       expect(span.get_tag('http.url')).to eq('/sample/path')
       expect(span.get_tag('out.host')).to eq('example.com')
+    end
+  end
+
+  context 'when query string in url' do
+    before do
+      WebMock.enable!(allow: agent_url)
+      stub_request(:get, /example.com/).to_return(status: 200)
+    end
+
+    after { WebMock.disable! }
+
+    it 'does not collect query string' do
+      uri = URI('http://example.com/sample/path?foo=bar')
+
+      Net::HTTP.get_response(uri)
+
+      expect(span.get_tag('http.url')).to eq('/sample/path')
     end
   end
 end

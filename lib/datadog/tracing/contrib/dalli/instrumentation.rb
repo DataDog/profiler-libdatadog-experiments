@@ -29,6 +29,11 @@ module Datadog
                   )
                 end
 
+                # Tag original global service name if not used
+                if span.service != Datadog.configuration.service
+                  span.set_tag(Tracing::Contrib::Ext::Metadata::TAG_BASE_SERVICE, Datadog.configuration.service)
+                end
+
                 span.set_tag(Tracing::Metadata::Ext::TAG_KIND, Tracing::Metadata::Ext::SpanKind::TAG_CLIENT)
 
                 span.set_tag(Tracing::Metadata::Ext::TAG_COMPONENT, Ext::TAG_COMPONENT)
@@ -45,8 +50,10 @@ module Datadog
 
                 span.set_tag(Contrib::Ext::DB::TAG_SYSTEM, Ext::TAG_SYSTEM)
 
-                cmd = Quantize.format_command(op, args)
-                span.set_tag(Ext::TAG_COMMAND, cmd)
+                if datadog_configuration[:command_enabled]
+                  cmd = Quantize.format_command(op, args)
+                  span.set_tag(Ext::TAG_COMMAND, cmd)
+                end
 
                 Contrib::SpanAttributeSchema.set_peer_service!(span, Ext::PEER_SERVICE_SOURCES)
                 super

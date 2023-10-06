@@ -14,14 +14,10 @@ RSpec.describe Datadog::Profiling::Collectors::CpuAndWallTimeWorker do
 
   subject(:cpu_and_wall_time_worker) do
     described_class.new(
-      recorder: recorder,
-      max_frames: 400,
-      tracer: nil,
-      endpoint_collection_enabled: endpoint_collection_enabled,
       gc_profiling_enabled: gc_profiling_enabled,
       allocation_counting_enabled: allocation_counting_enabled,
       no_signals_workaround_enabled: no_signals_workaround_enabled,
-      timeline_enabled: timeline_enabled,
+      thread_context_collector: build_thread_context_collector(recorder),
       **options
     )
   end
@@ -407,13 +403,127 @@ RSpec.describe Datadog::Profiling::Collectors::CpuAndWallTimeWorker do
             .map { |it| it.values.fetch(:'cpu-samples') }
             .reduce(:+)
 
+        # Since we're reading the stats AFTER the worker is stopped, we expect a consistent view, as otherwise we
+        # would have races (e.g. the stats could be changing as we're trying to read them, since it's on a background
+        # thread that doesn't hold the Global VM Lock while mutating some of these values)
         stats = cpu_and_wall_time_worker.stats
+        trigger_sample_attempts = stats.fetch(:trigger_sample_attempts)
 
         expect(sample_count).to be > 0
-        expect(stats.fetch(:trigger_sample_attempts)).to eq(stats.fetch(:trigger_simulated_signal_delivery_attempts))
-        expect(stats.fetch(:trigger_sample_attempts)).to eq(stats.fetch(:simulated_signal_delivery))
-        expect(stats.fetch(:trigger_sample_attempts)).to eq(stats.fetch(:signal_handler_enqueued_sample))
-        expect(stats.fetch(:trigger_sample_attempts)).to eq(stats.fetch(:postponed_job_success))
+        expect(stats).to(
+          match(
+            a_hash_including(
+              trigger_simulated_signal_delivery_attempts: trigger_sample_attempts,
+              simulated_signal_delivery: trigger_sample_attempts,
+              signal_handler_enqueued_sample: trigger_sample_attempts,
+              # @ivoanjo: A flaky test run was reported for this assertion -- a case where `trigger_sample_attempts` was 1
+              # but `postponed_job_success` was 0 (on Ruby 2.6).
+              # See https://app.circleci.com/pipelines/github/DataDog/dd-trace-rb/11866/workflows/08660eeb-0746-4675-87fd-33d473a3f479/jobs/445903
+              # At the time, the test didn't print the full `stats` contents, so it's unclear to me if the test failed
+              # because the postponed job API returned something other than success, or if something else entirely happened.
+              # If/when it happens again, hopefully the extra debugging + this info helps out with the investigation.
+              postponed_job_success: trigger_sample_attempts,
+            )
+          ),
+          "**If you see this test flaking, please report it to @ivoanjo!**\n\n" \
+          "sample_count: #{sample_count}, samples: #{all_samples}"
+        )
+      end
+    end
+
+    context 'when allocation sampling is enabled' do
+      let(:options) { { allocation_sample_every: 1 } }
+
+      before do
+        allow(Datadog.logger).to receive(:warn)
+      end
+
+      it 'logs a warning message mentioning this is experimental' do
+        expect(Datadog.logger).to receive(:warn).with(/Enabled experimental allocation profiling/)
+
+        start
+      end
+
+      it 'records allocated objects' do
+        stub_const('CpuAndWallTimeWorkerSpec::TestStruct', Struct.new(:foo))
+
+        start
+
+        123.times { CpuAndWallTimeWorkerSpec::TestStruct.new }
+        allocation_line = __LINE__ - 1
+
+        cpu_and_wall_time_worker.stop
+
+        allocation_sample =
+          samples_for_thread(samples_from_pprof(recorder.serialize!), Thread.current)
+            .find { |s| s.labels[:'allocation class'] == 'CpuAndWallTimeWorkerSpec::TestStruct' }
+
+        expect(allocation_sample.values).to include(:'alloc-samples' => 123)
+        expect(allocation_sample.locations.first.lineno).to eq allocation_line
+      end
+
+      context 'when sampling optimized Ruby strings' do
+        # Regression test: Some internal Ruby classes use a `rb_str_tmp_frozen_acquire` function which allocates a
+        # weird "intermediate" string object that has its class pointer set to 0.
+        #
+        # When such an object gets sampled, we need to take care not to try to resolve its class name.
+        #
+        # In practice, this test is actually validating behavior of the `ThreadContext` collector, but we can only
+        # really trigger this situation when using the allocation tracepoint, which lives in the `CpuAndWallTimeWorker`.
+        it 'does not crash' do
+          start
+
+          expect(Time.new.strftime(String.new('Potato'))).to_not be nil
+        end
+      end
+    end
+
+    context 'when allocation sampling is disabled' do
+      let(:options) { { allocation_sample_every: 0 } }
+
+      it 'does not record allocations' do
+        stub_const('CpuAndWallTimeWorkerSpec::TestStruct', Struct.new(:foo))
+
+        start
+
+        123.times { CpuAndWallTimeWorkerSpec::TestStruct.new }
+
+        cpu_and_wall_time_worker.stop
+
+        expect(samples_from_pprof(recorder.serialize!).map(&:values)).to all(include(:'alloc-samples' => 0))
+      end
+    end
+
+    context 'Process::Waiter crash regression tests' do
+      # On Ruby 2.3 to 2.6, there's a crash when accessing instance variables of the `process_waiter_thread`,
+      # see https://bugs.ruby-lang.org/issues/17807 .
+      #
+      # In those Ruby versions, there's a very special subclass of `Thread` called `Process::Waiter` that causes VM
+      # crashes whenever something tries to read its instance or thread variables. This subclass of thread only
+      # shows up when the `Process.detach` API gets used.
+      #
+      # @ivoanjo: This affected the old profiler at some point (but never affected the new profiler), but I think
+      # it's useful to keep around so that we don't regress if we decide to start reading/writing some
+      # info to thread objects to implement some future feature.
+      it 'can sample an instance of Process::Waiter without crashing' do
+        forked_process = fork { sleep }
+        process_waiter_thread = Process.detach(forked_process)
+
+        start
+
+        all_samples = try_wait_until do
+          samples = samples_from_pprof_without_gc_and_overhead(recorder.serialize!)
+          samples if samples.any?
+        end
+
+        cpu_and_wall_time_worker.stop
+
+        sample = samples_for_thread(all_samples, process_waiter_thread).first
+
+        expect(sample.locations.first.path).to eq 'In native code'
+
+        Process.kill('TERM', forked_process)
+        process_waiter_thread.join
       end
     end
   end
@@ -544,12 +654,6 @@ RSpec.describe Datadog::Profiling::Collectors::CpuAndWallTimeWorker do
       stop
 
       expect(inner_ran).to be true
-    end
-  end
-
-  describe '#enabled=' do
-    it 'does nothing (provided only for API compatibility)' do
-      cpu_and_wall_time_worker.enabled = true
     end
   end
 
@@ -702,13 +806,19 @@ RSpec.describe Datadog::Profiling::Collectors::CpuAndWallTimeWorker do
 
   def build_another_instance
     described_class.new(
-      recorder: build_stack_recorder,
-      max_frames: 400,
-      tracer: nil,
-      endpoint_collection_enabled: endpoint_collection_enabled,
       gc_profiling_enabled: gc_profiling_enabled,
       allocation_counting_enabled: allocation_counting_enabled,
       no_signals_workaround_enabled: no_signals_workaround_enabled,
+      thread_context_collector: build_thread_context_collector(build_stack_recorder)
+    )
+  end
+
+  def build_thread_context_collector(recorder)
+    Datadog::Profiling::Collectors::ThreadContext.new(
+      recorder: recorder,
+      max_frames: 400,
+      tracer: nil,
+      endpoint_collection_enabled: endpoint_collection_enabled,
       timeline_enabled: timeline_enabled,
     )
   end

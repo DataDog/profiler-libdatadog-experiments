@@ -3,7 +3,7 @@
 require 'spec_helper'
 require 'datadog/core/remote/component'
 
-RSpec.describe Datadog::Core::Remote::Component do
+RSpec.describe Datadog::Core::Remote::Component, :integration do
   let(:settings) { Datadog::Core::Configuration::Settings.new }
   let(:agent_settings) { Datadog::Core::Configuration::AgentSettingsResolver.call(settings, logger: nil) }
   let(:capabilities) { Datadog::Core::Remote::Client::Capabilities.new(settings) }
@@ -59,7 +59,7 @@ RSpec.describe Datadog::Core::Remote::Component do
       let(:negotiation) { double }
 
       before do
-        expect(Datadog::Core::Transport::HTTP).to receive(:v7).and_return(transport_v7)
+        expect(Datadog::Core::Remote::Transport::HTTP).to receive(:v7).and_return(transport_v7)
         expect(Datadog::Core::Remote::Client).to receive(:new).and_return(client)
         allow(Datadog::Core::Remote::Negotiation).to receive(:new).and_return(negotiation)
 

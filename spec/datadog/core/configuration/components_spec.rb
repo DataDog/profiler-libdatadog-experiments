@@ -3,7 +3,6 @@ require 'datadog/profiling/spec_helper'
 
 require 'logger'
 
-require 'datadog/core/configuration/agent_settings_resolver'
 require 'datadog/core/configuration/components'
 require 'datadog/core/diagnostics/environment_logger'
 require 'datadog/core/diagnostics/health'
@@ -11,16 +10,8 @@ require 'datadog/core/logger'
 require 'datadog/core/telemetry/client'
 require 'datadog/core/runtime/metrics'
 require 'datadog/core/workers/runtime_metrics'
-require 'datadog/profiling'
-require 'datadog/profiling/collectors/code_provenance'
-require 'datadog/profiling/collectors/old_stack'
-require 'datadog/profiling/profiler'
-require 'datadog/profiling/old_recorder'
-require 'datadog/profiling/exporter'
-require 'datadog/profiling/scheduler'
-require 'datadog/profiling/tasks/setup'
-require 'datadog/profiling/trace_identifiers/helper'
 require 'datadog/statsd'
+require 'datadog/tracing/configuration/agent_settings_resolver'
 require 'datadog/tracing/flush'
 require 'datadog/tracing/sampling/all_sampler'
 require 'datadog/tracing/sampling/priority_sampler'
@@ -29,17 +20,22 @@ require 'datadog/tracing/sampling/rule_sampler'
 require 'datadog/tracing/sync_writer'
 require 'datadog/tracing/tracer'
 require 'datadog/tracing/writer'
-require 'ddtrace/transport/http/adapters/net'
+require 'datadog/core/transport/http/adapters/net'
 
+# TODO: Components contains behavior for all of the different products.
+#       Test behavior needs to be extracted to complimentary component files for every product.
 RSpec.describe Datadog::Core::Configuration::Components do
   subject(:components) { described_class.new(settings) }
 
+  let(:logger) { instance_double(Datadog::Core::Logger) }
   let(:settings) { Datadog::Core::Configuration::Settings.new }
   let(:agent_settings) { Datadog::Core::Configuration::AgentSettingsResolver.call(settings, logger: nil) }
 
   let(:profiler_setup_task) { Datadog::Profiling.supported? ? instance_double(Datadog::Profiling::Tasks::Setup) : nil }
   let(:remote) { instance_double(Datadog::Core::Remote::Component, start: nil, shutdown!: nil) }
   let(:telemetry) { instance_double(Datadog::Core::Telemetry::Client) }
+
+  include_context 'non-development execution environment'
 
   before do
     # Ensure the real task never gets run (so it doesn't apply our thread patches and other extensions to our test env)
@@ -56,7 +52,6 @@ RSpec.describe Datadog::Core::Configuration::Components do
   end
 
   describe '::new' do
-    let(:logger) { instance_double(Datadog::Core::Logger) }
     let(:tracer) { instance_double(Datadog::Tracing::Tracer) }
     let(:profiler) { Datadog::Profiling.supported? ? instance_double(Datadog::Profiling::Profiler) : nil }
     let(:runtime_metrics) { instance_double(Datadog::Core::Workers::RuntimeMetrics) }
@@ -68,12 +63,12 @@ RSpec.describe Datadog::Core::Configuration::Components do
         .and_return(logger)
 
       expect(described_class).to receive(:build_tracer)
-        .with(settings, instance_of(Datadog::Core::Configuration::AgentSettingsResolver::AgentSettings))
+        .with(settings, logger: logger)
         .and_return(tracer)
 
       expect(Datadog::Profiling::Component).to receive(:build_profiler_component).with(
         settings: settings,
-        agent_settings: instance_of(Datadog::Core::Configuration::AgentSettingsResolver::AgentSettings),
+        agent_settings: agent_settings,
         optional_tracer: tracer,
       ).and_return(profiler)
 
@@ -387,7 +382,7 @@ RSpec.describe Datadog::Core::Configuration::Components do
   end
 
   describe '::build_tracer' do
-    subject(:build_tracer) { described_class.build_tracer(settings, agent_settings) }
+    subject(:build_tracer) { described_class.build_tracer(settings, logger: logger) }
 
     context 'given an instance' do
       let(:instance) { instance_double(Datadog::Tracing::Tracer) }
@@ -453,6 +448,10 @@ RSpec.describe Datadog::Core::Configuration::Components do
           allow(Datadog::Tracing::Writer).to receive(:new)
             .with(agent_settings: agent_settings, **writer_options)
             .and_return(writer)
+
+          expect(Datadog::Tracing::Configuration::AgentSettingsResolver).to receive(:call)
+            .with(settings, logger: logger)
+            .and_return(agent_settings)
         end
 
         after do
@@ -777,73 +776,104 @@ RSpec.describe Datadog::Core::Configuration::Components do
 
           context 'set to true' do
             let(:enabled) { true }
-            let(:sync_writer) { Datadog::Tracing::SyncWriter.new }
 
-            before do
-              expect(Datadog::Tracing::SyncWriter)
-                .to receive(:new)
-                .with(agent_settings: agent_settings, **writer_options)
-                .and_return(writer)
-            end
+            context 'and :async' do
+              context 'is set' do
+                let(:writer) { Datadog::Tracing::Writer.new }
+                let(:writer_options) { { transport_options: :bar } }
+                let(:writer_options_test_mode) { { transport_options: :baz } }
 
-            context 'and :trace_flush' do
-              before do
-                allow(settings.tracing.test_mode)
-                  .to receive(:trace_flush)
-                  .and_return(trace_flush)
+                before do
+                  allow(settings.tracing.test_mode)
+                    .to receive(:async)
+                    .and_return(true)
+
+                  allow(settings.tracing.test_mode)
+                    .to receive(:writer_options)
+                    .and_return(writer_options_test_mode)
+
+                  expect(Datadog::Tracing::SyncWriter)
+                    .not_to receive(:new)
+
+                  expect(Datadog::Tracing::Writer)
+                    .to receive(:new)
+                    .with(agent_settings: agent_settings, **writer_options_test_mode)
+                    .and_return(writer)
+                end
+
+                it_behaves_like 'event publishing writer'
               end
 
               context 'is not set' do
-                let(:trace_flush) { nil }
+                let(:sync_writer) { Datadog::Tracing::SyncWriter.new }
 
-                it_behaves_like 'new tracer' do
-                  let(:options) do
-                    {
-                      writer: kind_of(Datadog::Tracing::SyncWriter)
-                    }
-                  end
-                  let(:writer) { sync_writer }
-
-                  it_behaves_like 'event publishing writer'
+                before do
+                  expect(Datadog::Tracing::SyncWriter)
+                    .to receive(:new)
+                    .with(agent_settings: agent_settings, **writer_options)
+                    .and_return(writer)
                 end
-              end
 
-              context 'is set' do
-                let(:trace_flush) { instance_double(Datadog::Tracing::Flush::Finished) }
-
-                it_behaves_like 'new tracer' do
-                  let(:options) do
-                    {
-                      trace_flush: trace_flush,
-                      writer: kind_of(Datadog::Tracing::SyncWriter)
-                    }
+                context 'and :trace_flush' do
+                  before do
+                    allow(settings.tracing.test_mode)
+                      .to receive(:trace_flush)
+                      .and_return(trace_flush)
                   end
-                  let(:writer) { sync_writer }
 
-                  it_behaves_like 'event publishing writer'
+                  context 'is not set' do
+                    let(:trace_flush) { nil }
+
+                    it_behaves_like 'new tracer' do
+                      let(:options) do
+                        {
+                          writer: kind_of(Datadog::Tracing::SyncWriter)
+                        }
+                      end
+                      let(:writer) { sync_writer }
+
+                      it_behaves_like 'event publishing writer'
+                    end
+                  end
+
+                  context 'is set' do
+                    let(:trace_flush) { instance_double(Datadog::Tracing::Flush::Finished) }
+
+                    it_behaves_like 'new tracer' do
+                      let(:options) do
+                        {
+                          trace_flush: trace_flush,
+                          writer: kind_of(Datadog::Tracing::SyncWriter)
+                        }
+                      end
+                      let(:writer) { sync_writer }
+
+                      it_behaves_like 'event publishing writer'
+                    end
+                  end
                 end
-              end
-            end
 
-            context 'and :writer_options' do
-              before do
-                allow(settings.tracing.test_mode)
-                  .to receive(:writer_options)
-                  .and_return(writer_options)
-              end
-
-              context 'are set' do
-                let(:writer_options) { { transport_options: :bar } }
-
-                it_behaves_like 'new tracer' do
-                  let(:options) do
-                    {
-                      writer: writer
-                    }
+                context 'and :writer_options' do
+                  before do
+                    allow(settings.tracing.test_mode)
+                      .to receive(:writer_options)
+                      .and_return(writer_options)
                   end
-                  let(:writer) { sync_writer }
 
-                  it_behaves_like 'event publishing writer'
+                  context 'are set' do
+                    let(:writer_options) { { transport_options: :bar } }
+
+                    it_behaves_like 'new tracer' do
+                      let(:options) do
+                        {
+                          writer: writer
+                        }
+                      end
+                      let(:writer) { sync_writer }
+
+                      it_behaves_like 'event publishing writer'
+                    end
+                  end
                 end
               end
             end
@@ -943,17 +973,6 @@ RSpec.describe Datadog::Core::Configuration::Components do
   end
 
   describe 'writer event callbacks' do
-    describe Datadog::Core::Configuration::Components.singleton_class::WRITER_RECORD_ENVIRONMENT_INFORMATION_CALLBACK do
-      subject(:call) { described_class.call(writer, responses) }
-      let(:writer) { double('writer') }
-      let(:responses) { [double('response')] }
-
-      it 'invokes the environment logger with responses' do
-        expect(Datadog::Core::Diagnostics::EnvironmentLogger).to receive(:log!).with(responses)
-        call
-      end
-    end
-
     describe '.writer_update_priority_sampler_rates_callback' do
       subject(:call) do
         described_class.writer_update_priority_sampler_rates_callback(sampler).call(writer, responses)
