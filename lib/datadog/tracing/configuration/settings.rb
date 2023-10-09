@@ -1,4 +1,5 @@
 require_relative '../../tracing/configuration/ext'
+require_relative '../../core/environment/variable_helpers'
 require_relative 'http'
 
 module Datadog
@@ -371,6 +372,12 @@ module Datadog
                   o.env Tracing::Configuration::Ext::Test::ENV_MODE_ENABLED
                 end
 
+                # Use async writer in test mode
+                option :async do |o|
+                  o.type :bool
+                  o.default false
+                end
+
                 option :trace_flush
 
                 option :writer_options do |o|
@@ -382,8 +389,8 @@ module Datadog
               # @see file:docs/GettingStarted.md#configuring-the-transport-layer Configuring the transport layer
               #
               # A {Proc} that configures a custom tracer transport.
-              # @yield Receives a {Datadog::Transport::HTTP} that can be modified with custom adapters and settings.
-              # @yieldparam [Datadog::Transport::HTTP] t transport to be configured.
+              # @yield Receives a {Datadog::Tracing::Transport::HTTP} that can be modified with custom adapters and settings.
+              # @yieldparam [Datadog::Tracing::Transport::HTTP] t transport to be configured.
               # @default `nil`
               # @return [Proc,nil]
               option :transport_options do |o|
@@ -425,7 +432,7 @@ module Datadog
                 option :enabled do |o|
                   o.type :bool
                   o.default do
-                    disabled = env_to_bool(Tracing::Configuration::Ext::ClientIp::ENV_DISABLED)
+                    disabled = Core::Environment::VariableHelpers.env_to_bool(Tracing::Configuration::Ext::ClientIp::ENV_DISABLED)
 
                     enabled = if disabled.nil?
                                 false
@@ -438,7 +445,7 @@ module Datadog
                               end
 
                     # ENABLED env var takes precedence over deprecated DISABLED
-                    env_to_bool(Tracing::Configuration::Ext::ClientIp::ENV_ENABLED, enabled)
+                    Core::Environment::VariableHelpers.env_to_bool(Tracing::Configuration::Ext::ClientIp::ENV_ENABLED, enabled)
                   end
                 end
 

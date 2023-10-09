@@ -41,11 +41,13 @@ RSpec.describe Datadog::AppSec::Event do
         dbl = double
 
         allow(dbl).to receive(:events).and_return([])
+        allow(dbl).to receive(:derivatives).and_return(derivatives)
 
         dbl
       end
 
       let(:event_count) { 1 }
+      let(:derivatives) { {} }
 
       let(:events) do
         Array.new(event_count) do
@@ -101,6 +103,44 @@ RSpec.describe Datadog::AppSec::Event do
 
         it 'marks the trace to be kept' do
           expect(trace.sampling_priority).to eq Datadog::Tracing::Sampling::Ext::Priority::USER_KEEP
+        end
+
+        context 'waf_result derivatives' do
+          let(:derivatives) do
+            {
+              '_dd.appsec.s.req.headers' => [{ 'host' => [8], 'version' => [8] }]
+            }
+          end
+
+          context 'JSON payload' do
+            it 'uses JSON string when do not exceeds MIN_SCHEMA_SIZE_FOR_COMPRESSION' do
+              stub_const('Datadog::AppSec::Event::MIN_SCHEMA_SIZE_FOR_COMPRESSION', 3000)
+              meta = top_level_span.meta
+
+              expect(meta['_dd.appsec.s.req.headers']).to eq('[{"host":[8],"version":[8]}]')
+            end
+          end
+
+          context 'Compressed payload' do
+            it 'uses compressed value when JSON string is bigger than MIN_SCHEMA_SIZE_FOR_COMPRESSION' do
+              result = "H4sIAOYoHGUAA4aphwAAAA=\n"
+              stub_const('Datadog::AppSec::Event::MIN_SCHEMA_SIZE_FOR_COMPRESSION', 1)
+              expect(described_class).to receive(:compressed_and_base64_encoded).and_return(result)
+
+              meta = top_level_span.meta
+
+              expect(meta['_dd.appsec.s.req.headers']).to eq(result)
+            end
+          end
+
+          context 'derivative values exceed Event::MAX_ENCODED_SCHEMA_SIZE value' do
+            it 'do not add derivative key to meta' do
+              stub_const('Datadog::AppSec::Event::MAX_ENCODED_SCHEMA_SIZE', 1)
+              meta = top_level_span.meta
+
+              expect(meta['_dd.appsec.s.req.headers']).to be_nil
+            end
+          end
         end
       end
 
