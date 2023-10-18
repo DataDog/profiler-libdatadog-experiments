@@ -22,14 +22,12 @@ module Datadog
             parent_context = tracer.provider.context
 
             @composited_executor.post(*args) do
-              begin
-                original_context = tracer.provider.context
-                tracer.provider.context = parent_context
-                yield
-              ensure
-                # Restore context in case the current thread gets reused
-                tracer.provider.context = original_context
-              end
+              original_context = tracer.provider.context
+              tracer.provider.context = parent_context
+              yield
+            ensure
+              # Restore context in case the current thread gets reused
+              tracer.provider.context = original_context
             end
           end
 
