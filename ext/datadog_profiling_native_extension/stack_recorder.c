@@ -158,6 +158,8 @@ static VALUE error_symbol = Qnil; // :error in Ruby
 #define TIMELINE_VALUE          {.type_ = VALUE_STRING("timeline"),          .unit = VALUE_STRING("nanoseconds")}
 #define TIMELINE_VALUE_ID 6
 
+#define LIBDATADOG_STRING_TABLE_LIMIT 20971520 // 20MB
+
 static const ddog_prof_ValueType all_value_types[] =
   {CPU_TIME_VALUE, CPU_SAMPLES_VALUE, WALL_TIME_VALUE, ALLOC_SAMPLES_VALUE, HEAP_SAMPLES_VALUE, HEAP_SIZE_VALUE, TIMELINE_VALUE};
 
@@ -337,14 +339,14 @@ static void initialize_slot_concurrency_control(struct stack_recorder_state *sta
 
 static void initialize_profiles(struct stack_recorder_state *state, ddog_prof_Slice_ValueType sample_types) {
   ddog_prof_Profile_NewResult slot_one_profile_result =
-    ddog_prof_Profile_new(sample_types, NULL /* period is optional */, NULL /* start_time is optional */);
+    ddog_prof_Profile_new(sample_types, NULL /* period is optional */, NULL /* start_time is optional */, LIBDATADOG_STRING_TABLE_LIMIT);
 
   if (slot_one_profile_result.tag == DDOG_PROF_PROFILE_NEW_RESULT_ERR) {
     rb_raise(rb_eRuntimeError, "Failed to initialize slot one profile: %"PRIsVALUE, get_error_details_and_drop(&slot_one_profile_result.err));
   }
 
   ddog_prof_Profile_NewResult slot_two_profile_result =
-    ddog_prof_Profile_new(sample_types, NULL /* period is optional */, NULL /* start_time is optional */);
+    ddog_prof_Profile_new(sample_types, NULL /* period is optional */, NULL /* start_time is optional */, LIBDATADOG_STRING_TABLE_LIMIT);
 
   if (slot_two_profile_result.tag == DDOG_PROF_PROFILE_NEW_RESULT_ERR) {
     // Uff! Though spot. We need to make sure to properly clean up the other profile as well first
