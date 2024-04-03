@@ -198,13 +198,14 @@ void ddog_CancellationToken_drop(struct ddog_CancellationToken *token);
  *   time.
  *
  * # Safety
- * All slices must be have pointers that are suitably aligned for their type
+ * All slices must have pointers that are suitably aligned for their type
  * and must have the correct number of elements for the slice.
  */
 DDOG_CHECK_RETURN
 struct ddog_prof_Profile_NewResult ddog_prof_Profile_new(struct ddog_prof_Slice_ValueType sample_types,
                                                          const struct ddog_prof_Period *period,
-                                                         const struct ddog_Timespec *start_time);
+                                                         const struct ddog_Timespec *start_time,
+                                                         size_t string_arena_capacity_hint);
 
 /**
  * # Safety
