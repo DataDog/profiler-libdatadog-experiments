@@ -64,7 +64,7 @@ module Datadog
             lib_datadog_gem = ::Gem.loaded_specs['libdatadog']
             @profiler_info = {
               version: Datadog::Core::Environment::Identity.tracer_version,
-              libdatadog: "#{lib_datadog_gem.version}-#{lib_datadog_gem.platform}",
+              libdatadog: "hack-inlined-version",
               settings: collect_settings_recursively(settings.profiling),
             }.freeze
           end
