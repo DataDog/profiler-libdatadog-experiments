@@ -23,12 +23,12 @@ RSpec.describe Datadog::Profiling::Component do
     context 'when profiling is not supported' do
       before { allow(Datadog::Profiling).to receive(:supported?).and_return(false) }
 
-      it { is_expected.to be nil }
+      it { is_expected.to eq [nil, { profiling_enabled: false }] }
     end
 
     context 'by default' do
       it 'does not build a profiler' do
-        is_expected.to be nil
+        is_expected.to eq [nil, { profiling_enabled: false }]
       end
     end
 
@@ -38,7 +38,7 @@ RSpec.describe Datadog::Profiling::Component do
       end
 
       it 'does not build a profiler' do
-        is_expected.to be nil
+        is_expected.to eq [nil, { profiling_enabled: false }]
       end
     end
 
@@ -50,6 +50,10 @@ RSpec.describe Datadog::Profiling::Component do
         allow(profiler_setup_task).to receive(:run)
       end
 
+      it 'builds a profiler instance' do
+        expect(build_profiler_component).to match([instance_of(Datadog::Profiling::Profiler), { profiling_enabled: true }])
+      end
+
       context 'when using the new CPU Profiling 2.0 profiler' do
         it 'initializes a ThreadContext collector' do
           allow(Datadog::Profiling::Collectors::CpuAndWallTimeWorker).to receive(:new)
@@ -58,7 +62,7 @@ RSpec.describe Datadog::Profiling::Component do
 
           expect(settings.profiling.advanced).to receive(:max_frames).and_return(:max_frames_config)
           expect(settings.profiling.advanced)
-            .to receive(:experimental_timeline_enabled).and_return(:experimental_timeline_enabled_config)
+            .to receive(:timeline_enabled).and_return(:timeline_enabled_config)
           expect(settings.profiling.advanced.endpoint.collection)
             .to receive(:enabled).and_return(:endpoint_collection_enabled_config)
 
@@ -67,7 +71,7 @@ RSpec.describe Datadog::Profiling::Component do
             max_frames: :max_frames_config,
             tracer: tracer,
             endpoint_collection_enabled: :endpoint_collection_enabled_config,
-            timeline_enabled: :experimental_timeline_enabled_config,
+            timeline_enabled: :timeline_enabled_config,
           )
 
           build_profiler_component
@@ -85,57 +89,85 @@ RSpec.describe Datadog::Profiling::Component do
             no_signals_workaround_enabled: :no_signals_result,
             thread_context_collector: instance_of(Datadog::Profiling::Collectors::ThreadContext),
             dynamic_sampling_rate_overhead_target_percentage: :overhead_target_percentage_config,
-            allocation_sample_every: kind_of(Integer),
             allocation_profiling_enabled: false,
           )
 
           build_profiler_component
         end
 
-        it 'initializes a CpuAndWallTimeWorker collector with gc_profiling_enabled set to false' do
-          expect(Datadog::Profiling::Collectors::CpuAndWallTimeWorker).to receive(:new).with hash_including(
-            gc_profiling_enabled: false,
-          )
-
-          build_profiler_component
-        end
-
-        context 'when force_enable_gc_profiling is enabled' do
+        context 'when gc_enabled is true' do
           before do
-            settings.profiling.advanced.force_enable_gc_profiling = true
-
-            allow(Datadog.logger).to receive(:debug)
+            settings.profiling.advanced.gc_enabled = true
+            stub_const('RUBY_VERSION', testing_version)
           end
 
-          it 'initializes a CpuAndWallTimeWorker collector with gc_profiling_enabled set to true' do
-            expect(Datadog::Profiling::Collectors::CpuAndWallTimeWorker).to receive(:new).with hash_including(
-              gc_profiling_enabled: true,
-            )
+          ['2.7.0', '3.1.4', '3.2.3', '3.3.0'].each do |fixed_ruby|
+            context "on a Ruby version not affected by https://bugs.ruby-lang.org/issues/18464 (#{fixed_ruby})" do
+              let(:testing_version) { fixed_ruby }
 
-            build_profiler_component
+              it 'initializes a CpuAndWallTimeWorker collector with gc_profiling_enabled set to true' do
+                expect(Datadog::Profiling::Collectors::CpuAndWallTimeWorker).to receive(:new).with hash_including(
+                  gc_profiling_enabled: true,
+                )
+
+                allow(Datadog.logger).to receive(:debug)
+
+                build_profiler_component
+              end
+            end
           end
 
-          context 'on Ruby 3.x' do
-            before { skip 'Behavior does not apply to current Ruby version' if RUBY_VERSION < '3.0' }
+          ['3.0.0', '3.1.0', '3.1.3'].each do |broken_ractors_ruby|
+            context "on a Ruby version affected by https://bugs.ruby-lang.org/issues/18464 (#{broken_ractors_ruby})" do
+              let(:testing_version) { broken_ractors_ruby }
 
-            it 'logs a debug message' do
-              expect(Datadog.logger).to receive(:debug).with(/Garbage Collection force enabled/)
+              it 'initializes a CpuAndWallTimeWorker collector with gc_profiling_enabled set to false and warns' do
+                expect(Datadog::Profiling::Collectors::CpuAndWallTimeWorker).to receive(:new).with hash_including(
+                  gc_profiling_enabled: false,
+                )
+
+                expect(Datadog.logger).to receive(:warn).with(/has been disabled/)
+
+                build_profiler_component
+              end
+            end
+          end
+
+          context 'on Ruby 3' do
+            let(:testing_version) { '3.3.0' }
+
+            it 'emits a debug log about Ractors interfering with GC profiling' do
+              expect(Datadog.logger)
+                .to receive(:debug).with(/using Ractors may result in GC profiling unexpectedly stopping/)
 
               build_profiler_component
             end
           end
         end
 
+        context 'when gc_enabled is false' do
+          before { settings.profiling.advanced.gc_enabled = false }
+
+          it 'initializes a CpuAndWallTimeWorker collector with gc_profiling_enabled set to false' do
+            expect(Datadog::Profiling::Collectors::CpuAndWallTimeWorker).to receive(:new).with hash_including(
+              gc_profiling_enabled: false,
+            )
+
+            build_profiler_component
+          end
+        end
+
         context 'when allocation profiling is enabled' do
           before do
-            settings.profiling.advanced.experimental_allocation_enabled = true
+            settings.profiling.allocation_enabled = true
+            settings.profiling.advanced.gc_enabled = false # Disable this to avoid any additional warnings coming from it
             stub_const('RUBY_VERSION', testing_version)
           end
 
           context 'on Ruby 2.x' do
             let(:testing_version) { '2.3.0 ' }
 
-            it 'initializes CpuAndWallTimeWorker and StackRecorder with allocation sampling support and warns' do
+            it 'initializes CpuAndWallTimeWorker and StackRecorder with allocation sampling support' do
               expect(Datadog::Profiling::Collectors::CpuAndWallTimeWorker).to receive(:new).with hash_including(
                 allocation_profiling_enabled: true,
               )
@@ -143,8 +175,8 @@ RSpec.describe Datadog::Profiling::Component do
                 .with(hash_including(alloc_samples_enabled: true))
                 .and_call_original
 
-              expect(Datadog.logger).to receive(:warn).with(/experimental allocation profiling/)
-              expect(Datadog.logger).to_not receive(:warn).with(/Ractor/)
+              expect(Datadog.logger).to receive(:debug).with(/Enabled allocation profiling/)
+              expect(Datadog.logger).to_not receive(:warn)
 
               build_profiler_component
             end
@@ -164,7 +196,6 @@ RSpec.describe Datadog::Profiling::Component do
 
                 expect(Datadog.logger).to receive(:warn).with(/forcibly disabled/)
                 expect(Datadog.logger).to_not receive(:warn).with(/Ractor/)
-                expect(Datadog.logger).to_not receive(:warn).with(/experimental allocation profiling/)
 
                 build_profiler_component
               end
@@ -184,7 +215,7 @@ RSpec.describe Datadog::Profiling::Component do
                   .and_call_original
 
                 expect(Datadog.logger).to receive(:warn).with(/Ractors.+crashes/)
-                expect(Datadog.logger).to receive(:warn).with(/experimental allocation profiling/)
+                expect(Datadog.logger).to receive(:debug).with(/Enabled allocation profiling/)
 
                 build_profiler_component
               end
@@ -203,7 +234,7 @@ RSpec.describe Datadog::Profiling::Component do
                   .and_call_original
 
                 expect(Datadog.logger).to receive(:warn).with(/Ractors.+stopping/)
-                expect(Datadog.logger).to receive(:warn).with(/experimental allocation profiling/)
+                expect(Datadog.logger).to receive(:debug).with(/Enabled allocation profiling/)
 
                 build_profiler_component
               end
@@ -213,7 +244,7 @@ RSpec.describe Datadog::Profiling::Component do
 
         context 'when allocation profiling is disabled' do
           before do
-            settings.profiling.advanced.experimental_allocation_enabled = false
+            settings.profiling.allocation_enabled = false
           end
 
           it 'initializes CpuAndWallTimeWorker and StackRecorder without allocation sampling support' do
@@ -234,6 +265,7 @@ RSpec.describe Datadog::Profiling::Component do
 
           before do
             settings.profiling.advanced.experimental_heap_enabled = true
+            settings.profiling.advanced.gc_enabled = false # Disable this to avoid any additional warnings coming from it
             stub_const('RUBY_VERSION', testing_version)
           end
 
@@ -253,7 +285,7 @@ RSpec.describe Datadog::Profiling::Component do
 
           context 'and allocation profiling disabled' do
             before do
-              settings.profiling.advanced.experimental_allocation_enabled = false
+              settings.profiling.allocation_enabled = false
             end
 
             it 'raises an ArgumentError during component initialization' do
@@ -263,7 +295,7 @@ RSpec.describe Datadog::Profiling::Component do
 
           context 'and allocation profiling enabled and supported' do
             before do
-              settings.profiling.advanced.experimental_allocation_enabled = true
+              settings.profiling.allocation_enabled = true
             end
 
             it 'initializes StackRecorder with heap sampling support and warns' do
@@ -272,7 +304,7 @@ RSpec.describe Datadog::Profiling::Component do
                 .and_call_original
 
               expect(Datadog.logger).to receive(:warn).with(/Ractors.+stopping/)
-              expect(Datadog.logger).to receive(:warn).with(/experimental allocation profiling/)
+              expect(Datadog.logger).to receive(:debug).with(/Enabled allocation profiling/)
               expect(Datadog.logger).to receive(:warn).with(/experimental heap profiling/)
               expect(Datadog.logger).to receive(:warn).with(/experimental heap size profiling/)
 
@@ -289,7 +321,7 @@ RSpec.describe Datadog::Profiling::Component do
                   .with(hash_including(heap_samples_enabled: true, heap_size_enabled: false))
                   .and_call_original
 
-                expect(Datadog.logger).to receive(:warn).with(/experimental allocation profiling/)
+                expect(Datadog.logger).to receive(:debug).with(/Enabled allocation profiling/)
                 expect(Datadog.logger).to receive(:warn).with(/experimental heap profiling/)
                 expect(Datadog.logger).not_to receive(:warn).with(/experimental heap size profiling/)
 
@@ -305,7 +337,7 @@ RSpec.describe Datadog::Profiling::Component do
                   .with(hash_including(heap_samples_enabled: true))
                   .and_call_original
 
-                expect(Datadog.logger).to receive(:warn).with(/experimental allocation profiling/)
+                expect(Datadog.logger).to receive(:debug).with(/Enabled allocation profiling/)
                 expect(Datadog.logger).to receive(:warn).with(/experimental heap profiling/)
                 expect(Datadog.logger).to receive(:warn).with(/experimental heap size profiling/)
                 expect(Datadog.logger).to receive(:debug).with(/forced object recycling.+upgrading to Ruby >= 3.1/)
@@ -331,7 +363,7 @@ RSpec.describe Datadog::Profiling::Component do
         end
 
         context 'when timeline is enabled' do
-          before { settings.profiling.advanced.experimental_timeline_enabled = true }
+          before { settings.profiling.advanced.timeline_enabled = true }
 
           it 'sets up the StackRecorder with timeline_enabled: true' do
             expect(Datadog::Profiling::StackRecorder)
@@ -342,7 +374,7 @@ RSpec.describe Datadog::Profiling::Component do
         end
 
         context 'when timeline is disabled' do
-          before { settings.profiling.advanced.experimental_timeline_enabled = false }
+          before { settings.profiling.advanced.timeline_enabled = false }
 
           it 'sets up the StackRecorder with timeline_enabled: false' do
             expect(Datadog::Profiling::StackRecorder)
@@ -374,15 +406,13 @@ RSpec.describe Datadog::Profiling::Component do
           allow(Datadog::Profiling::StackRecorder).to receive(:new)
 
           expect(described_class).to receive(:no_signals_workaround_enabled?).and_return(:no_signals_result)
-          expect(settings.profiling.advanced).to receive(:experimental_timeline_enabled).and_return(:timeline_result)
-          expect(settings.profiling.advanced).to receive(:experimental_allocation_sample_rate).and_return(123)
+          expect(settings.profiling.advanced).to receive(:timeline_enabled).and_return(:timeline_result)
           expect(settings.profiling.advanced).to receive(:experimental_heap_sample_rate).and_return(456)
           expect(Datadog::Profiling::Exporter).to receive(:new).with(
             hash_including(
               internal_metadata: {
                 no_signals_workaround_enabled: :no_signals_result,
                 timeline_enabled: :timeline_result,
-                allocation_sample_every: 123,
                 heap_sample_every: 456,
               }
             )
@@ -519,6 +549,8 @@ RSpec.describe Datadog::Profiling::Component do
         end
 
         it 'falls back to the default value' do
+          allow(Datadog.logger).to receive(:error)
+
           expect(valid_overhead_target).to eq 2.0
         end
       end

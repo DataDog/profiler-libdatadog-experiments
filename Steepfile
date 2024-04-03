@@ -70,7 +70,6 @@ target :ddtrace do
   ignore 'lib/datadog/core/configuration/option_definition_set.rb'
   ignore 'lib/datadog/core/configuration/options.rb'
   ignore 'lib/datadog/core/configuration/settings.rb'
-  ignore 'lib/datadog/core/diagnostics/environment_logger.rb'
   ignore 'lib/datadog/core/diagnostics/health.rb'
   ignore 'lib/datadog/core/encoding.rb'
   ignore 'lib/datadog/core/environment/container.rb'
@@ -170,7 +169,6 @@ target :ddtrace do
   ignore 'lib/datadog/opentracer/thread_local_scope.rb'
   ignore 'lib/datadog/opentracer/thread_local_scope_manager.rb'
   ignore 'lib/datadog/opentracer/tracer.rb'
-  ignore 'lib/datadog/profiling/collectors/code_provenance.rb'
   ignore 'lib/datadog/profiling/ext/forking.rb'
   ignore 'lib/datadog/profiling/scheduler.rb'
   ignore 'lib/datadog/profiling/tag_builder.rb'
@@ -621,6 +619,7 @@ target :ddtrace do
   library 'base64'
   library 'digest'
   library 'zlib'
+  library 'time'
 
   repo_path 'vendor/rbs'
   library 'cucumber'
@@ -648,4 +647,5 @@ target :ddtrace do
 
   # TODO: gem 'libddwaf'
   library 'libddwaf'
+  library 'libdatadog'
 end

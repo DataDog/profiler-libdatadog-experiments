@@ -3,9 +3,9 @@
 module DDTrace
   module VERSION
     MAJOR = 1
-    MINOR = 19
-    PATCH = 0
-    PRE = 1
+    MINOR = 21
+    PATCH = 1
+    PRE = nil
     BUILD = 'timeline0'
     # PRE and BUILD above are modified for dev gems during gem build GHA workflow
 

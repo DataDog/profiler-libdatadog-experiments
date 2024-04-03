@@ -467,7 +467,7 @@ end
 
 | Key            | Description                                                                                                                                                                                       | Default                                    |
 |----------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------|
-| `service_name` | Name of application running the `active_record` instrumentation. May be overridden by `global_default_service_name`. [See *Additional Configuration* for more details](#additional-configuration) | Name of database adapter (e.g. `'mysql2'`) |
+| `service_name` | Override the service name for the SQL query instrumentation. ActiveRecord instantiation instrumentation always uses the application's configured service name. | Name of database adapter (e.g. `'mysql2'`) |
 
 **Configuring trace settings per database**
 
@@ -584,8 +584,7 @@ Aws::S3::Client.new.list_buckets
 
 ### Concurrent Ruby
 
-The Concurrent Ruby integration adds support for context propagation when using `::Concurrent::Future`.
-Making sure that code traced within the `Future#execute` will have correct parent set.
+The Concurrent Ruby integration adds support for context propagation when using `::Concurrent::Future` and `Concurrent::Async`, and ensures that code traced within the `Future#execute` and `Concurrent::Async#async` will have the correct parent set.
 
 To activate your integration, use the `Datadog.configure` method:
 
@@ -599,6 +598,19 @@ end
 # Pass context into code executed within Concurrent::Future
 Datadog::Tracing.trace('outer') do
   Concurrent::Future.execute { Datadog::Tracing.trace('inner') { } }.wait
+end
+
+# Pass context into code executed within Concurrent::Async
+class MyClass
+  include ConcurrentAsync
+
+  def foo
+    Datadog::Tracing.trace('inner') { }
+  end
+end
+
+Datadog::Tracing.trace('outer') do
+  MyClass.new.async.foo
 end
 ```
 
@@ -838,7 +850,7 @@ connection.get('/foo')
 | `distributed_tracing` |                                 | Enables [distributed tracing](#distributed-tracing)                                                                                                                                         | `true`    |
 | `split_by_domain`     |                                 | Uses the request domain as the service name when set to `true`.                                                                                                                             | `false`   |
 | `error_handler`       |                                 | A `Proc` that accepts a `response` parameter. If it evaluates to a *truthy* value, the trace span is marked as an error. By default only sets 5XX responses as errors.                      | `nil`     |
-
+| `on_error` | Custom error handler invoked when a request raises an error. Provided `span` and `error` as arguments. Sets an error on the span by default. | `proc { \|span, error\| span.set_error(error) unless span.nil? }` |
 
 ### Grape
 
@@ -1312,6 +1324,7 @@ end
 
 | Key                   | Env Var                    | Description                                                                                                                                                                                                                                                                                                                                                             | Default      |
 |-----------------------|----------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------|
+| `enabled` || Defines whether Postgres should be traced. | `true` |
 | `service_name`        | `DD_TRACE_PG_SERVICE_NAME` | Name of application running the `pg` instrumentation. May be overridden by `global_default_service_name`. [See *Additional Configuration* for more details](#additional-configuration)                                                                                                                                                                                  | `pg`         |
 | `peer_service`        | `DD_TRACE_PG_PEER_SERVICE` | Name of external service the application connects to                                                                                                                                                                                                                                                                                                                    | `nil`        |
 | `comment_propagation` | `DD_DBM_PROPAGATION_MODE`  | SQL comment propagation mode  for database monitoring. <br />(example: `disabled` \| `service`\| `full`). <br /><br />**Important**: *Note that enabling sql comment propagation results in potentially confidential data (service names) being stored in the databases which can then be accessed by other 3rd parties that have been granted access to the database.* | `'disabled'` |
@@ -2101,7 +2114,7 @@ For example, if `tracing.sampling.default_rate` is configured by [Remote Configu
 | `telemetry.enabled`                                     | `DD_INSTRUMENTATION_TELEMETRY_ENABLED`                  | `true`                       | Allows you to enable sending telemetry data to Datadog. Can be disabled, as documented [here](https://docs.datadoghq.com/tracing/configure_data_security/#telemetry-collection).                                                                                                                                                                                                                                                                                                                                                                                                         |
 | **Tracing**                                             |                                                         |                              |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `tracing.contrib.peer_service_mapping`                  | `DD_TRACE_PEER_SERVICE_MAPPING`                         | `nil`                        | Defines remapping of `peer.service` tag across all instrumentation. Provide a list of `old_value1:new_value1, old_value2:new_value2, ...`                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `tracing.contrib.global_default_service_name.enabled`   | `DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED`     | `false`                      | Changes the default value for `service_name` to the application service name across all instrumentation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `tracing.contrib.global_default_service_name.enabled`   | `DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED`     | `false`                      | Changes the default value for `service_name` to the application service name across all instrumentation. Used with [Inferred Services Beta](https://docs.datadoghq.com/tracing/guide/inferred-service-opt-in)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `tracing.distributed_tracing.propagation_extract_first` | `DD_TRACE_PROPAGATION_EXTRACT_FIRST` | `false` | Exit immediately on the first valid propagation format detected.  See [Distributed Tracing](#distributed-tracing) for more details. |
 | `tracing.distributed_tracing.propagation_extract_style` | `DD_TRACE_PROPAGATION_STYLE_EXTRACT`                    | `['Datadog','tracecontext']` | Distributed tracing propagation formats to extract. Overrides `DD_TRACE_PROPAGATION_STYLE`. See [Distributed Tracing](#distributed-tracing) for more details.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `tracing.distributed_tracing.propagation_inject_style`  | `DD_TRACE_PROPAGATION_STYLE_INJECT`                     | `['Datadog','tracecontext']` | Distributed tracing propagation formats to inject. Overrides `DD_TRACE_PROPAGATION_STYLE`. See [Distributed Tracing](#distributed-tracing) for more details.                                                                                                                                                                                                                                                                                                                                                                                                                             |

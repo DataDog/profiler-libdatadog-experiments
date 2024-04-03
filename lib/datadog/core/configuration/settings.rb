@@ -205,6 +205,22 @@ module Datadog
             option :transport
           end
 
+          # Can be used to enable/disable collection of allocation profiles.
+          #
+          # This feature is disabled by default
+          #
+          # @warn Due to bugs in Ruby we only recommend enabling this feature in
+          #       Ruby versions 2.x, 3.1.4+, 3.2.3+ and 3.3.0+
+          #       (more details in {Datadog::Profiling::Component.enable_allocation_profiling?})
+          #
+          # @default `DD_PROFILING_ALLOCATION_ENABLED` environment variable as a boolean, otherwise `false`
+          option :allocation_enabled do |o|
+            o.type :bool
+            o.deprecated_env 'DD_PROFILING_EXPERIMENTAL_ALLOCATION_ENABLED' # TODO: Remove this for dd-trace-rb 2.0
+            o.env 'DD_PROFILING_ALLOCATION_ENABLED'
+            o.default false
+          end
+
           # @public_api
           settings :advanced do
             # @deprecated No longer does anything, and will be removed on dd-trace-rb 2.0.
@@ -212,11 +228,13 @@ module Datadog
             # This was used prior to the GA of the new CPU Profiling 2.0 profiler. The CPU Profiling 2.0 profiler does not
             # use or need this setting and thus it doesn't do anything.
             option :max_events do |o|
-              o.after_set do
-                Datadog.logger.warn(
-                  'The profiling.advanced.max_events setting has been deprecated for removal and no ' \
-                  'longer does anything. Please remove it from your Datadog.configure block.'
-                )
+              o.after_set do |_, _, precedence|
+                unless precedence == Datadog::Core::Configuration::Option::Precedence::DEFAULT
+                  Datadog.logger.warn(
+                    'The profiling.advanced.max_events setting has been deprecated for removal and no ' \
+                    'longer does anything. Please remove it from your Datadog.configure block.'
+                  )
+                end
               end
             end
 
@@ -248,18 +266,23 @@ module Datadog
 
             # Can be used to disable the gathering of names and versions of gems in use by the service, used to power
             # grouping and categorization of stack traces.
-            option :code_provenance_enabled, default: true
+            option :code_provenance_enabled do |o|
+              o.type :bool
+              o.default true
+            end
 
             # @deprecated No longer does anything, and will be removed on dd-trace-rb 2.0.
             #
             # This was added as a temporary support option in case of issues with the new `Profiling::HttpTransport` class
             # but we're now confident it's working nicely so we've removed the old code path.
             option :legacy_transport_enabled do |o|
-              o.after_set do
-                Datadog.logger.warn(
-                  'The profiling.advanced.legacy_transport_enabled setting has been deprecated for removal and no ' \
-                  'longer does anything. Please remove it from your Datadog.configure block.'
-                )
+              o.after_set do |_, _, precedence|
+                unless precedence == Datadog::Core::Configuration::Option::Precedence::DEFAULT
+                  Datadog.logger.warn(
+                    'The profiling.advanced.legacy_transport_enabled setting has been deprecated for removal and no ' \
+                    'longer does anything. Please remove it from your Datadog.configure block.'
+                  )
+                end
               end
             end
 
@@ -268,11 +291,13 @@ module Datadog
             # This was used prior to the GA of the new CPU Profiling 2.0 profiler. Using CPU Profiling 2.0 is now the
             # default and this doesn't do anything.
             option :force_enable_new_profiler do |o|
-              o.after_set do
-                Datadog.logger.warn(
-                  'The profiling.advanced.force_enable_new_profiler setting has been deprecated for removal and no ' \
-                  'longer does anything. Please remove it from your Datadog.configure block.'
-                )
+              o.after_set do |_, _, precedence|
+                unless precedence == Datadog::Core::Configuration::Option::Precedence::DEFAULT
+                  Datadog.logger.warn(
+                    'The profiling.advanced.force_enable_new_profiler setting has been deprecated for removal and no ' \
+                    'longer does anything. Please remove it from your Datadog.configure block.'
+                  )
+                end
               end
             end
 
@@ -281,63 +306,75 @@ module Datadog
             # This was used prior to the GA of the new CPU Profiling 2.0 profiler. Using CPU Profiling 2.0 is now the
             # default and this doesn't do anything.
             option :force_enable_legacy_profiler do |o|
-              o.after_set do
-                Datadog.logger.warn(
-                  'The profiling.advanced.force_enable_legacy_profiler setting has been deprecated for removal and no ' \
-                  'longer does anything. Please remove it from your Datadog.configure block.'
-                )
+              o.after_set do |_, _, precedence|
+                unless precedence == Datadog::Core::Configuration::Option::Precedence::DEFAULT
+                  Datadog.logger.warn(
+                    'The profiling.advanced.force_enable_legacy_profiler setting has been deprecated for removal and no ' \
+                    'longer does anything. Please remove it from your Datadog.configure block.'
+                  )
+                end
               end
             end
 
-            # Forces enabling of profiling of time/resources spent in Garbage Collection.
+            # @deprecated No longer does anything, and will be removed on dd-trace-rb 2.0.
             #
-            # Note that setting this to "false" (or not setting it) will not prevent the feature from being
-            # being automatically enabled in the future.
-            #
-            # This feature defaults to off for two reasons:
-            # 1. Currently this feature can add a lot of overhead for GC-heavy workloads.
-            # 2. Although this feature is safe on Ruby 2.x, on Ruby 3.x it can break in applications that make use of
-            #    Ractors due to two Ruby VM bugs:
-            #    https://bugs.ruby-lang.org/issues/19112 AND https://bugs.ruby-lang.org/issues/18464.
-            #    If you use Ruby 3.x and your application does not use Ractors (or if your Ruby has been patched), the
-            #    feature is fully safe to enable and this toggle can be used to do so.
-            #
-            # We expect the once the above issues are overcome, we'll automatically enable the feature on fixed Ruby
-            # versions.
-            #
-            # @default `DD_PROFILING_FORCE_ENABLE_GC` environment variable, otherwise `false`
+            # GC profiling is now on by default and controlled by {:gc_enabled}.
             option :force_enable_gc_profiling do |o|
-              o.env 'DD_PROFILING_FORCE_ENABLE_GC'
+              o.after_set do |_, _, precedence|
+                unless precedence == Datadog::Core::Configuration::Option::Precedence::DEFAULT
+                  Datadog.logger.warn(
+                    'The profiling.advanced.force_enable_gc_profiling setting has been deprecated for removal and no ' \
+                    'longer does anything (the feature is now on by default). ' \
+                    'Please remove this setting from your Datadog.configure block.'
+                  )
+                end
+              end
+            end
+
+            # Can be used to enable/disable garbage collection profiling.
+            #
+            # @warn To avoid https://bugs.ruby-lang.org/issues/18464 even when enabled, GC profiling is only started
+            #       for Ruby versions 2.x, 3.1.4+, 3.2.3+ and 3.3.0+
+            #       (more details in {Datadog::Profiling::Component.enable_gc_profiling?})
+            #
+            # @warn Due to a VM bug in the Ractor implementation (https://bugs.ruby-lang.org/issues/19112) this feature
+            #       stops working when Ractors get garbage collected.
+            #
+            # @default `DD_PROFILING_GC_ENABLED` environment variable, otherwise `true`
+            option :gc_enabled do |o|
               o.type :bool
-              o.default false
+              o.env 'DD_PROFILING_GC_ENABLED'
+              o.default true
             end
 
             # Can be used to enable/disable the Datadog::Profiling.allocation_count feature.
             #
-            # This feature is now controlled via {:experimental_allocation_enabled}
+            # @deprecated Use {:allocation_enabled} (outside of advanced section) instead.
             option :allocation_counting_enabled do |o|
-              o.after_set do
-                Datadog.logger.warn(
-                  'The profiling.advanced.allocation_counting_enabled setting has been deprecated for removal and no ' \
-                  'longer does anything. Please remove it from your Datadog.configure block. ' \
-                  'Allocation counting is now controlled by the `experimental_allocation_enabled` setting instead.'
-                )
+              o.after_set do |_, _, precedence|
+                unless precedence == Datadog::Core::Configuration::Option::Precedence::DEFAULT
+                  Datadog.logger.warn(
+                    'The profiling.advanced.allocation_counting_enabled setting has been deprecated for removal and no ' \
+                    'longer does anything. Please remove it from your Datadog.configure block. ' \
+                    'Allocation counting is now controlled by the profiling.allocation_enabled setting instead.'
+                  )
+                end
               end
             end
 
-            # Can be used to enable/disable collection of allocation profiles.
-            #
-            # This feature is alpha and disabled by default
-            #
-            # @warn This feature is not supported/safe in all Rubies. Details in {Datadog::Profiling::Component} but
-            #       in summary, this should be supported on Ruby 2.x, 3.1.4+, 3.2.3+ and 3.3.0+. Enabling it on
-            #       unsupported Rubies may result in unexpected behaviour, including crashes.
-            #
-            # @default `DD_PROFILING_EXPERIMENTAL_ALLOCATION_ENABLED` environment variable as a boolean, otherwise `false`
+            # @deprecated Use {:allocation_enabled} (outside of advanced section) instead.
             option :experimental_allocation_enabled do |o|
               o.type :bool
-              o.env 'DD_PROFILING_EXPERIMENTAL_ALLOCATION_ENABLED'
               o.default false
+              o.after_set do |_, _, precedence|
+                unless precedence == Datadog::Core::Configuration::Option::Precedence::DEFAULT
+                  Datadog.logger.warn(
+                    'The profiling.advanced.experimental_allocation_enabled setting has been deprecated for removal and ' \
+                    'no longer does anything. Please remove it from your Datadog.configure block. ' \
+                    'Allocation profiling is now controlled by the profiling.allocation_enabled setting instead.'
+                  )
+                end
+              end
             end
 
             # Can be used to enable/disable the collection of heap profiles.
@@ -369,14 +406,18 @@ module Datadog
 
             # Can be used to configure the allocation sampling rate: a sample will be collected every x allocations.
             #
-            # The lower the value, the more accuracy in allocation and heap tracking but the bigger the overhead. In
-            # particular, a value of 1 will sample ALL allocations.
-            #
-            # @default `DD_PROFILING_EXPERIMENTAL_ALLOCATION_SAMPLE_RATE` environment variable, otherwise `50`.
+            # This feature is now controlled via {:overhead_target_percentage}
             option :experimental_allocation_sample_rate do |o|
-              o.type :int
-              o.env 'DD_PROFILING_EXPERIMENTAL_ALLOCATION_SAMPLE_RATE'
-              o.default 50
+              o.after_set do |_, _, precedence|
+                unless precedence == Datadog::Core::Configuration::Option::Precedence::DEFAULT
+                  Datadog.logger.warn(
+                    'The profiling.advanced.experimental_allocation_sample_rate setting has been deprecated for removal ' \
+                    'and no longer does anything. Please remove it from your Datadog.configure block. ' \
+                    'Allocation sample rate is now handled by a dynamic sampler which will adjust the sampling rate to ' \
+                    'keep to the configured `profiling.advanced.overhead_target_percentage`.'
+                  )
+                end
+              end
             end
 
             # Can be used to configure the heap sampling rate: a heap sample will be collected for every x allocation
@@ -410,9 +451,27 @@ module Datadog
             #
             # @default `DD_PROFILING_EXPERIMENTAL_TIMELINE_ENABLED` environment variable as a boolean, otherwise `false`
             option :experimental_timeline_enabled do |o|
+              o.after_set do |_, _, precedence|
+                unless precedence == Datadog::Core::Configuration::Option::Precedence::DEFAULT
+                  Datadog.logger.warn(
+                    'The profiling.advanced.experimental_timeline_enabled setting has been deprecated for removal ' \
+                    'and no longer does anything. Please remove it from your Datadog.configure block. ' \
+                    'The timeline feature counting is now controlled by the `timeline_enabled` setting instead.'
+                  )
+                end
+              end
+            end
+
+            # Controls data collection for the timeline feature.
+            #
+            # If you needed to disable this, please tell us why on <https://github.com/DataDog/dd-trace-rb/issues/new>,
+            # so we can fix it!
+            #
+            # @default `DD_PROFILING_TIMELINE_ENABLED` environment variable as a boolean, otherwise `true`
+            option :timeline_enabled do |o|
               o.type :bool
-              o.env 'DD_PROFILING_EXPERIMENTAL_TIMELINE_ENABLED'
-              o.default false
+              o.env 'DD_PROFILING_TIMELINE_ENABLED'
+              o.default true
             end
 
             # The profiler gathers data by sending `SIGPROF` unix signals to Ruby application threads.

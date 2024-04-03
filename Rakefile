@@ -18,6 +18,7 @@ TEST_METADATA = {
     '' => '✅ 2.1 / ✅ 2.2 / ✅ 2.3 / ✅ 2.4 / ✅ 2.5 / ✅ 2.6 / ✅ 2.7 / ✅ 3.0 / ✅ 3.1 / ✅ 3.2 / ✅ 3.3 / ✅ jruby'
   },
   'profiling:main' => {
+    'opentelemetry' => '❌ 2.1 / ❌ 2.2 / ❌ 2.3 / ❌ 2.4 / ❌ 2.5 / ✅ 2.6 / ✅ 2.7 / ✅ 3.0 / ✅ 3.1 / ✅ 3.2 / ✅ 3.3 / ❌ jruby',
     '' => '✅ 2.1 / ✅ 2.2 / ✅ 2.3 / ✅ 2.4 / ✅ 2.5 / ✅ 2.6 / ✅ 2.7 / ✅ 3.0 / ✅ 3.1 / ✅ 3.2 / ✅ 3.3 / ✅ jruby'
   },
   'profiling:ractors' => {
@@ -349,7 +350,7 @@ namespace :spec do
   RSpec::Core::RakeTask.new(:main) do |t, args|
     t.pattern = 'spec/**/*_spec.rb'
     t.exclude_pattern = 'spec/**/{contrib,benchmark,redis,opentracer,auto_instrument,opentelemetry,profiling}/**/*_spec.rb,'\
-                        ' spec/**/{auto_instrument,opentelemetry}_spec.rb'
+                        ' spec/**/{auto_instrument,opentelemetry}_spec.rb, spec/ddtrace/gem_packaging_spec.rb'
     t.rspec_opts = args.to_a.join(' ')
   end
 
@@ -653,12 +654,12 @@ namespace :changelog do
 end
 
 NATIVE_EXTS = [
-  Rake::ExtensionTask.new("ddtrace_profiling_native_extension.#{RUBY_VERSION}_#{RUBY_PLATFORM}") do |ext|
-    ext.ext_dir = 'ext/ddtrace_profiling_native_extension'
+  Rake::ExtensionTask.new("datadog_profiling_native_extension.#{RUBY_VERSION}_#{RUBY_PLATFORM}") do |ext|
+    ext.ext_dir = 'ext/datadog_profiling_native_extension'
   end,
 
-  Rake::ExtensionTask.new("ddtrace_profiling_loader.#{RUBY_VERSION}_#{RUBY_PLATFORM}") do |ext|
-    ext.ext_dir = 'ext/ddtrace_profiling_loader'
+  Rake::ExtensionTask.new("datadog_profiling_loader.#{RUBY_VERSION}_#{RUBY_PLATFORM}") do |ext|
+    ext.ext_dir = 'ext/datadog_profiling_loader'
   end
 ].freeze
 
