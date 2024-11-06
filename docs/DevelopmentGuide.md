@@ -53,22 +53,22 @@ All tests should run in CI. When adding new `_spec.rb` files, you may need to ad
  ```ruby
    namespace :spec do
      RSpec::Core::RakeTask.new(:foo) do |t, args|
-       t.pattern = "spec/datadog/tracing/contrib/bar/**/*_spec.rb"
+       t.pattern = "spec/datadog/tracing/contrib/foo/**/*_spec.rb"
        t.rspec_opts = args.to_a.join(' ')
      end
    end
  ```
 
- - Ensure the Rake task is configured to run for the appropriate Ruby runtimes, by introducing it to our test matrix. You should find the task with `bundle exec rake -T test:<foo>`.
+ - Ensure the Rake task is configured to run for the appropriate Ruby runtimes, by adding it to our `Matrixfile`. You should find the task with `bundle exec rake -T test:foo` after adding it.
 
 ```ruby
-  TEST_METADATA = {
+  {
     'foo' => {
       # Without any appraisal group dependencies
       ''    => '✅ 2.1 / ✅ 2.2 / ✅ 2.3 / ✅ 2.4 / ✅ 2.5 / ✅ 2.6 / ✅ 2.7 / ✅ 3.0 / ✅ 3.1 / ✅ 3.2 / ✅ 3.3 / ✅ jruby',
 
-      # or with appraisal group definition `bar`
-      'bar' => '✅ 2.1 / ✅ 2.2 / ✅ 2.3 / ✅ 2.4 / ✅ 2.5 / ✅ 2.6 / ✅ 2.7 / ✅ 3.0 / ✅ 3.1 / ✅ 3.2 / ✅ 3.3 / ✅ jruby'
+      # or with appraisal group definition `foo-on-rails`, that includes additional gems
+      'foo-on-rails' => '✅ 2.1 / ✅ 2.2 / ✅ 2.3 / ✅ 2.4 / ✅ 2.5 / ✅ 2.6 / ✅ 2.7 / ✅ 3.0 / ✅ 3.1 / ✅ 3.2 / ✅ 3.3 / ✅ jruby'
     },
   }
 ```
@@ -105,6 +105,24 @@ TEST_METADATA = {
 }
 ```
 
+**Using appraisal**
+
+`appraisal` command should only be used to update gemfiles in `gemfiles/`
+and install dependencies. It should not be used to run tests, since it does not
+work in all configurations. To run the tests, use:
+
+```sh
+env BUNDLE_GEMFILE=gemfiles/#{ruby_runtime}_#{appraisal_group}.gemfile rake #{spec_task}
+```
+
+Note that the file names use underscores while appraisal group and
+configuration definitions use dashes. The conversion could be performed as
+follows:
+
+```sh
+env BUNDLE_GEMFILE=gemfiles/#{ruby_runtime.tr('-', '_')}_#{appraisal_group.tr('-', '_')}.gemfile rake #{spec_task}
+```
+
 **Working with appraisal groups**
 
 Checkout [Apppraisal](https://github.com/thoughtbot/appraisal) to learn the basics.
@@ -117,7 +135,7 @@ After introducing a new group definition or changing existing one, run `bundle e
 
 To install dependencies, run `bundle exec appraisal install`.
 
-In addition, if you already know which appraisal group definition to work with, you can target a specific group operation with environment vairable `APPRAISAL_GROUP`, instead of all the groups from your environment. For example:
+In addition, if you already know which appraisal group definition to work with, you can target a specific group operation with environment variable `APPRAISAL_GROUP`, instead of all the groups from your environment. For example:
 
 ```
 # This would only install dependencies for `aws` group definition

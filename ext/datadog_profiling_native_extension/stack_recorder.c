@@ -187,6 +187,7 @@ typedef struct profile_slot {
 struct stack_recorder_state {
   // Heap recorder instance
   heap_recorder *heap_recorder;
+  bool heap_clean_after_gc_enabled;
 
   pthread_mutex_t mutex_slot_one;
   profile_slot profile_slot_one;
@@ -240,16 +241,7 @@ static VALUE _native_new(VALUE klass);
 static void initialize_slot_concurrency_control(struct stack_recorder_state *state);
 static void initialize_profiles(struct stack_recorder_state *state, ddog_prof_Slice_ValueType sample_types);
 static void stack_recorder_typed_data_free(void *data);
-static VALUE _native_initialize(
-  DDTRACE_UNUSED VALUE _self,
-  VALUE recorder_instance,
-  VALUE cpu_time_enabled,
-  VALUE alloc_samples_enabled,
-  VALUE heap_samples_enabled,
-  VALUE heap_size_enabled,
-  VALUE heap_sample_every,
-  VALUE timeline_enabled
-);
+static VALUE _native_initialize(int argc, VALUE *argv, DDTRACE_UNUSED VALUE _self);
 static VALUE _native_serialize(VALUE self, VALUE recorder_instance);
 static VALUE ruby_time_from(ddog_Timespec ddprof_time);
 static void *call_serialize_without_gvl(void *call_args);
@@ -273,8 +265,10 @@ static VALUE _native_gc_force_recycle(DDTRACE_UNUSED VALUE _self, VALUE obj);
 static VALUE _native_has_seen_id_flag(DDTRACE_UNUSED VALUE _self, VALUE obj);
 static VALUE _native_stats(DDTRACE_UNUSED VALUE self, VALUE instance);
 static VALUE build_profile_stats(profile_slot *slot, long serialization_time_ns, long heap_iteration_prep_time_ns, long heap_profile_build_time_ns);
+static VALUE _native_is_object_recorded(DDTRACE_UNUSED VALUE _self, VALUE recorder_instance, VALUE object_id);
+static VALUE _native_heap_recorder_reset_last_update(DDTRACE_UNUSED VALUE _self, VALUE recorder_instance);
+static VALUE _native_recorder_after_gc_step(DDTRACE_UNUSED VALUE _self, VALUE recorder_instance);
 static u_int32_t intern_or_raise(struct stack_recorder_state *state, const char *str);
-
 
 void stack_recorder_init(VALUE profiling_module) {
   VALUE stack_recorder_class = rb_define_class_under(profiling_module, "StackRecorder", rb_cObject);
@@ -291,7 +285,7 @@ void stack_recorder_init(VALUE profiling_module) {
   // https://bugs.ruby-lang.org/issues/18007 for a discussion around this.
   rb_define_alloc_func(stack_recorder_class, _native_new);
 
-  rb_define_singleton_method(stack_recorder_class, "_native_initialize", _native_initialize, 7);
+  rb_define_singleton_method(stack_recorder_class, "_native_initialize", _native_initialize, -1);
   rb_define_singleton_method(stack_recorder_class, "_native_serialize",  _native_serialize, 1);
   rb_define_singleton_method(stack_recorder_class, "_native_reset_after_fork", _native_reset_after_fork, 1);
   rb_define_singleton_method(stack_recorder_class, "_native_stats", _native_stats, 1);
@@ -310,6 +304,9 @@ void stack_recorder_init(VALUE profiling_module) {
       _native_gc_force_recycle, 1);
   rb_define_singleton_method(testing_module, "_native_has_seen_id_flag",
       _native_has_seen_id_flag, 1);
+  rb_define_singleton_method(testing_module, "_native_is_object_recorded?", _native_is_object_recorded, 2);
+  rb_define_singleton_method(testing_module, "_native_heap_recorder_reset_last_update", _native_heap_recorder_reset_last_update, 1);
+  rb_define_singleton_method(testing_module, "_native_recorder_after_gc_step", _native_recorder_after_gc_step, 1);
 
   ok_symbol = ID2SYM(rb_intern_const("ok"));
   error_symbol = ID2SYM(rb_intern_const("error"));
@@ -332,6 +329,8 @@ static VALUE _native_new(VALUE klass) {
 
   // Note: Any exceptions raised from this note until the TypedData_Wrap_Struct call will lead to the state memory
   // being leaked.
+
+  state->heap_clean_after_gc_enabled = false;
 
   ddog_prof_Slice_ValueType sample_types = {.ptr = all_value_types, .len = ALL_VALUE_TYPES_COUNT};
 
@@ -377,14 +376,14 @@ static void initialize_slot_concurrency_control(struct stack_recorder_state *sta
 
 static void initialize_profiles(struct stack_recorder_state *state, ddog_prof_Slice_ValueType sample_types) {
   ddog_prof_Profile_NewResult slot_one_profile_result =
-    ddog_prof_Profile_new_with_string_storage(sample_types, NULL /* period is optional */, NULL /* start_time is optional */, state->string_storage);
+    ddog_prof_Profile_with_string_storage(sample_types, NULL /* period is optional */, NULL /* start_time is optional */, state->string_storage);
 
   if (slot_one_profile_result.tag == DDOG_PROF_PROFILE_NEW_RESULT_ERR) {
     rb_raise(rb_eRuntimeError, "Failed to initialize slot one profile: %"PRIsVALUE, get_error_details_and_drop(&slot_one_profile_result.err));
   }
 
   ddog_prof_Profile_NewResult slot_two_profile_result =
-    ddog_prof_Profile_new_with_string_storage(sample_types, NULL /* period is optional */, NULL /* start_time is optional */, state->string_storage);
+    ddog_prof_Profile_with_string_storage(sample_types, NULL /* period is optional */, NULL /* start_time is optional */, state->string_storage);
 
   if (slot_two_profile_result.tag == DDOG_PROF_PROFILE_NEW_RESULT_ERR) {
     // Uff! Though spot. We need to make sure to properly clean up the other profile as well first
@@ -417,25 +416,32 @@ static void stack_recorder_typed_data_free(void *state_ptr) {
   ruby_xfree(state);
 }
 
-static VALUE _native_initialize(
-  DDTRACE_UNUSED VALUE _self,
-  VALUE recorder_instance,
-  VALUE cpu_time_enabled,
-  VALUE alloc_samples_enabled,
-  VALUE heap_samples_enabled,
-  VALUE heap_size_enabled,
-  VALUE heap_sample_every,
-  VALUE timeline_enabled
-) {
+static VALUE _native_initialize(int argc, VALUE *argv, DDTRACE_UNUSED VALUE _self) {
+  VALUE options;
+  rb_scan_args(argc, argv, "0:", &options);
+  if (options == Qnil) options = rb_hash_new();
+
+  VALUE recorder_instance = rb_hash_fetch(options, ID2SYM(rb_intern("self_instance")));
+  VALUE cpu_time_enabled = rb_hash_fetch(options, ID2SYM(rb_intern("cpu_time_enabled")));
+  VALUE alloc_samples_enabled = rb_hash_fetch(options, ID2SYM(rb_intern("alloc_samples_enabled")));
+  VALUE heap_samples_enabled = rb_hash_fetch(options, ID2SYM(rb_intern("heap_samples_enabled")));
+  VALUE heap_size_enabled = rb_hash_fetch(options, ID2SYM(rb_intern("heap_size_enabled")));
+  VALUE heap_sample_every = rb_hash_fetch(options, ID2SYM(rb_intern("heap_sample_every")));
+  VALUE timeline_enabled = rb_hash_fetch(options, ID2SYM(rb_intern("timeline_enabled")));
+  VALUE heap_clean_after_gc_enabled = rb_hash_fetch(options, ID2SYM(rb_intern("heap_clean_after_gc_enabled")));
+
   ENFORCE_BOOLEAN(cpu_time_enabled);
   ENFORCE_BOOLEAN(alloc_samples_enabled);
   ENFORCE_BOOLEAN(heap_samples_enabled);
   ENFORCE_BOOLEAN(heap_size_enabled);
   ENFORCE_TYPE(heap_sample_every, T_FIXNUM);
   ENFORCE_BOOLEAN(timeline_enabled);
+  ENFORCE_BOOLEAN(heap_clean_after_gc_enabled);
 
   struct stack_recorder_state *state;
   TypedData_Get_Struct(recorder_instance, struct stack_recorder_state, &stack_recorder_typed_data, state);
+
+  state->heap_clean_after_gc_enabled = (heap_clean_after_gc_enabled == Qtrue);
 
   heap_recorder_set_sample_rate(state->heap_recorder, NUM2INT(heap_sample_every));
 
@@ -688,6 +694,13 @@ void record_endpoint(VALUE recorder_instance, uint64_t local_root_span_id, ddog_
   if (result.tag == DDOG_PROF_PROFILE_RESULT_ERR) {
     rb_raise(rb_eArgError, "Failed to record endpoint: %"PRIsVALUE, get_error_details_and_drop(&result.err));
   }
+}
+
+void recorder_after_gc_step(VALUE recorder_instance) {
+  struct stack_recorder_state *state;
+  TypedData_Get_Struct(recorder_instance, struct stack_recorder_state, &stack_recorder_typed_data, state);
+
+  if (state->heap_clean_after_gc_enabled) heap_recorder_update_young_objects(state->heap_recorder);
 }
 
 #define MAX_LEN_HEAP_ITERATION_ERROR_MSG 256
@@ -1053,4 +1066,27 @@ static u_int32_t intern_or_raise(struct stack_recorder_state *state, const char 
     rb_raise(rb_eRuntimeError, "Failed to intern char slice: %"PRIsVALUE, get_error_details_and_drop(&intern_result.err));
   }
   return intern_result.ok;
+}
+
+static VALUE _native_is_object_recorded(DDTRACE_UNUSED VALUE _self, VALUE recorder_instance, VALUE obj_id) {
+  ENFORCE_TYPE(obj_id, T_FIXNUM);
+
+  struct stack_recorder_state *state;
+  TypedData_Get_Struct(recorder_instance, struct stack_recorder_state, &stack_recorder_typed_data, state);
+
+  return heap_recorder_testonly_is_object_recorded(state->heap_recorder, obj_id);
+}
+
+static VALUE _native_heap_recorder_reset_last_update(DDTRACE_UNUSED VALUE _self, VALUE recorder_instance) {
+  struct stack_recorder_state *state;
+  TypedData_Get_Struct(recorder_instance, struct stack_recorder_state, &stack_recorder_typed_data, state);
+
+  heap_recorder_testonly_reset_last_update(state->heap_recorder);
+
+  return Qtrue;
+}
+
+static VALUE _native_recorder_after_gc_step(DDTRACE_UNUSED VALUE _self, VALUE recorder_instance) {
+  recorder_after_gc_step(recorder_instance);
+  return Qtrue;
 }

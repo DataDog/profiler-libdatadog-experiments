@@ -2,6 +2,47 @@
 
 ## [Unreleased]
 
+## [2.5.0] - 2024-11-05
+
+### Added
+
+* Performance: Profiling: Add setting to lower heap profiling memory use/latency by cleaning up young objects after Ruby GC ([#4020][])
+
+### Changed
+
+* Core: Replace the `debase-ruby_core_source` gem with the `datadog-ruby_core_source` ([#4014][])
+* Core: Upgrade to `libdatadog` 13.1 ([#3997][])
+
+### Fixed
+
+* Fix `undefined method` error for Rails runner ([#3996][])
+* Apply version tag only to spans that use the global/default service name ([#4027][])
+* Ensure UDS takes precedence over HTTP when both Agent configurations defined ([#4024][])
+* Remove duplicate leading slash in resource name for Grape routes ([#4033][])
+
+## [2.4.0] - 2024-10-11
+
+### Added
+
+* Core: Allow changing sampling rate for customer defined tags and resources ([#3956][])
+* Profiling: Add GVL profiling for Ruby 3.2+ as a preview feature ([#3929][])
+* Profiling: Otel: Add preview support for correlating profiling with otel ruby gem ([#3984][])
+* Tracing: AppSec: Add http.route tag to Rails, Grape, and Sinatra integrations ([#3849][])
+* Tracing: Add capabilities to remote config: tracing sample rate, tracing logs injection, tracing http header tags ([#3888][])
+* AppSec: Add a force disable of AppSec feature when using Ruby >= 3.3 with old FFI gem version ([#3969][])
+
+### Changed
+
+* AppSec: Improve PII compliance ([#3857][])
+* AppSec: Integrations: Improve accuracy of login tracking for Devise ([#3867][])
+* Crashtracking feature is now disabled by default ([#3970][])
+
+### Fixed
+
+* AppSec: Integrations: Fix GraphQL instrumentation for query fragments ([#3887][])
+* Bug: Profiling: Fix (small) memory leak in profiler when forking ([#3852][])
+* Tracing: Integrations: Fix GraphQL integration reconfiguration ([#3859][])
+
 ## [2.3.0] - 2024-08-22
 
 ### Added
@@ -2962,7 +3003,9 @@ Release notes: https://github.com/DataDog/dd-trace-rb/releases/tag/v0.3.1
 Git diff: https://github.com/DataDog/dd-trace-rb/compare/v0.3.0...v0.3.1
 
 
-[Unreleased]: https://github.com/DataDog/dd-trace-rb/compare/v2.3.0...master
+[Unreleased]: https://github.com/DataDog/dd-trace-rb/compare/v2.5.0...master
+[2.5.0]: https://github.com/DataDog/dd-trace-rb/compare/v2.4.0...v2.5.0
+[2.4.0]: https://github.com/DataDog/dd-trace-rb/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/DataDog/dd-trace-rb/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/DataDog/dd-trace-rb/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/DataDog/dd-trace-rb/compare/v2.0.0...v2.1.0
@@ -4383,6 +4426,25 @@ Git diff: https://github.com/DataDog/dd-trace-rb/compare/v0.3.0...v0.3.1
 [#3837]: https://github.com/DataDog/dd-trace-rb/issues/3837
 [#3839]: https://github.com/DataDog/dd-trace-rb/issues/3839
 [#3841]: https://github.com/DataDog/dd-trace-rb/issues/3841
+[#3849]: https://github.com/DataDog/dd-trace-rb/issues/3849
+[#3852]: https://github.com/DataDog/dd-trace-rb/issues/3852
+[#3857]: https://github.com/DataDog/dd-trace-rb/issues/3857
+[#3859]: https://github.com/DataDog/dd-trace-rb/issues/3859
+[#3867]: https://github.com/DataDog/dd-trace-rb/issues/3867
+[#3887]: https://github.com/DataDog/dd-trace-rb/issues/3887
+[#3888]: https://github.com/DataDog/dd-trace-rb/issues/3888
+[#3929]: https://github.com/DataDog/dd-trace-rb/issues/3929
+[#3956]: https://github.com/DataDog/dd-trace-rb/issues/3956
+[#3969]: https://github.com/DataDog/dd-trace-rb/issues/3969
+[#3970]: https://github.com/DataDog/dd-trace-rb/issues/3970
+[#3984]: https://github.com/DataDog/dd-trace-rb/issues/3984
+[#3996]: https://github.com/DataDog/dd-trace-rb/issues/3996
+[#3997]: https://github.com/DataDog/dd-trace-rb/issues/3997
+[#4014]: https://github.com/DataDog/dd-trace-rb/issues/4014
+[#4020]: https://github.com/DataDog/dd-trace-rb/issues/4020
+[#4024]: https://github.com/DataDog/dd-trace-rb/issues/4024
+[#4027]: https://github.com/DataDog/dd-trace-rb/issues/4027
+[#4033]: https://github.com/DataDog/dd-trace-rb/issues/4033
 [@AdrianLC]: https://github.com/AdrianLC
 [@Azure7111]: https://github.com/Azure7111
 [@BabyGroot]: https://github.com/BabyGroot

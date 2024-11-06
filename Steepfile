@@ -5,6 +5,8 @@ target :datadog do
 
   ignore 'lib/datadog/appsec.rb'
   ignore 'lib/datadog/appsec/component.rb'
+  # Excluded due to https://github.com/soutaro/steep/issues/1232
+  ignore 'lib/datadog/appsec/configuration/settings.rb'
   ignore 'lib/datadog/appsec/contrib/'
   ignore 'lib/datadog/appsec/contrib/auto_instrument.rb'
   ignore 'lib/datadog/appsec/contrib/integration.rb'
@@ -68,6 +70,8 @@ target :datadog do
   ignore 'lib/datadog/core/metrics/metric.rb'
   ignore 'lib/datadog/core/metrics/options.rb'
   ignore 'lib/datadog/core/pin.rb'
+  # steep fails in this file due to https://github.com/soutaro/steep/issues/1231
+  ignore 'lib/datadog/core/remote/tie.rb'
   ignore 'lib/datadog/core/runtime/ext.rb'
   ignore 'lib/datadog/core/runtime/metrics.rb'
   ignore 'lib/datadog/core/transport/ext.rb'
@@ -100,6 +104,7 @@ target :datadog do
   ignore 'lib/datadog/core/workers/polling.rb'
   ignore 'lib/datadog/core/workers/queue.rb'
   ignore 'lib/datadog/core/workers/runtime_metrics.rb'
+  ignore 'lib/datadog/di/configuration/settings.rb'
   ignore 'lib/datadog/kit/appsec/events.rb' # disabled because of https://github.com/soutaro/steep/issues/701
   ignore 'lib/datadog/kit/identity.rb'      # disabled because of https://github.com/soutaro/steep/issues/701
   ignore 'lib/datadog/opentelemetry.rb'
@@ -495,7 +500,6 @@ target :datadog do
   ignore 'lib/datadog/tracing/sampling/priority_sampler.rb'
   ignore 'lib/datadog/tracing/sampling/rate_by_key_sampler.rb'
   ignore 'lib/datadog/tracing/sampling/rate_by_service_sampler.rb'
-  ignore 'lib/datadog/tracing/sampling/rate_limiter.rb'
   ignore 'lib/datadog/tracing/sampling/rate_sampler.rb'
   ignore 'lib/datadog/tracing/sampling/rule.rb'
   ignore 'lib/datadog/tracing/sampling/rule_sampler.rb'
@@ -548,7 +552,6 @@ target :datadog do
 
   repo_path 'vendor/rbs'
   library 'cucumber'
-  library 'ffi'
   library 'jruby'
   library 'gem'
   library 'rails'
@@ -569,8 +572,10 @@ target :datadog do
   library 'passenger'
   library 'webmock'
   library 'graphql'
+  library 'datadog-ci'
 
-  # TODO: gem 'libddwaf'
-  library 'libddwaf'
+  # ffi version 1.17 was shipped with invalid rbs types:
+  # https://github.com/ffi/ffi/issues/1107
+  library 'libddwaf-stub'
   library 'libdatadog'
 end

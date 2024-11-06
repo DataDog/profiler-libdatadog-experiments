@@ -5,10 +5,11 @@ require 'webrick'
 require 'fiddle'
 
 RSpec.describe Datadog::Core::Crashtracking::Component, skip: !CrashtrackingHelpers.supported? do
+  let(:logger) { Logger.new($stdout) }
+
   describe '.build' do
     let(:settings) { Datadog::Core::Configuration::Settings.new }
     let(:agent_settings) { double('agent_settings') }
-    let(:logger) { Logger.new($stdout) }
     let(:tags) { { 'tag1' => 'value1' } }
     let(:agent_base_url) { 'agent_base_url' }
     let(:ld_library_path) { 'ld_library_path' }
@@ -97,17 +98,9 @@ RSpec.describe Datadog::Core::Crashtracking::Component, skip: !CrashtrackingHelp
   end
 
   context 'instance methods' do
-    # No crash tracker process should still be running at the start of each testcase
-    around do |example|
-      wait_for { `pgrep -f libdatadog-crashtracking-receiver` }.to be_empty
-      example.run
-      wait_for { `pgrep -f libdatadog-crashtracking-receiver` }.to be_empty
-    end
-
     describe '#start' do
       context 'when _native_start_or_update_on_fork raises an exception' do
         it 'logs the exception' do
-          logger = Logger.new($stdout)
           crashtracker = build_crashtracker(logger: logger)
 
           expect(described_class).to receive(:_native_start_or_update_on_fork) { raise 'Test failure' }
@@ -116,62 +109,11 @@ RSpec.describe Datadog::Core::Crashtracking::Component, skip: !CrashtrackingHelp
           crashtracker.start
         end
       end
-
-      it 'starts the crash tracker' do
-        crashtracker = build_crashtracker
-
-        crashtracker.start
-
-        wait_for { `pgrep -f libdatadog-crashtracking-receiver` }.to_not be_empty
-
-        tear_down!
-      end
-
-      context 'when calling start multiple times in a row' do
-        it 'only starts the crash tracker once' do
-          crashtracker = build_crashtracker
-
-          3.times { crashtracker.start }
-
-          wait_for { `pgrep -f libdatadog-crashtracking-receiver`.lines.size }.to be 1
-
-          tear_down!
-        end
-      end
-
-      context 'when multiple instances' do
-        it 'only starts the crash tracker once' do
-          crashtracker = build_crashtracker
-          crashtracker.start
-
-          another_crashtracker = build_crashtracker
-          another_crashtracker.start
-
-          wait_for { `pgrep -f libdatadog-crashtracking-receiver`.lines.size }.to be 1
-
-          tear_down!
-        end
-      end
-
-      context 'when forked' do
-        it 'starts a second crash tracker for the fork' do
-          crashtracker = build_crashtracker
-
-          crashtracker.start
-
-          expect_in_fork do
-            wait_for { `pgrep -f libdatadog-crashtracking-receiver`.lines.size }.to be 2
-          end
-
-          tear_down!
-        end
-      end
     end
 
     describe '#stop' do
       context 'when _native_stop_crashtracker raises an exception' do
         it 'logs the exception' do
-          logger = Logger.new($stdout)
           crashtracker = build_crashtracker(logger: logger)
 
           expect(described_class).to receive(:_native_stop) { raise 'Test failure' }
@@ -180,24 +122,13 @@ RSpec.describe Datadog::Core::Crashtracking::Component, skip: !CrashtrackingHelp
           crashtracker.stop
         end
       end
-
-      it 'stops the crash tracker' do
-        crashtracker = build_crashtracker
-
-        crashtracker.start
-
-        wait_for { `pgrep -f libdatadog-crashtracking-receiver`.lines.size }.to eq 1
-
-        crashtracker.stop
-
-        wait_for { `pgrep -f libdatadog-crashtracking-receiver` }.to be_empty
-      end
     end
 
     describe '#update_on_fork' do
+      before { allow(logger).to receive(:debug) }
+
       context 'when _native_stop_crashtracker raises an exception' do
         it 'logs the exception' do
-          logger = Logger.new($stdout)
           crashtracker = build_crashtracker(logger: logger)
 
           expect(described_class).to receive(:_native_start_or_update_on_fork) { raise 'Test failure' }
@@ -207,25 +138,27 @@ RSpec.describe Datadog::Core::Crashtracking::Component, skip: !CrashtrackingHelp
         end
       end
 
-      it 'update_on_fork the crash tracker' do
+      it 'updates the crash tracker' do
         expect(described_class).to receive(:_native_start_or_update_on_fork).with(
           hash_including(action: :update_on_fork)
         )
 
-        crashtracker = build_crashtracker
+        crashtracker = build_crashtracker(logger: logger)
 
         crashtracker.update_on_fork
       end
 
-      it 'updates existing crash tracking process after started' do
-        crashtracker = build_crashtracker
+      it 'refreshes the latest settings' do
+        allow(Datadog).to receive(:configuration).and_return(:latest_settings)
+        allow(Datadog::Core::Crashtracking::TagBuilder).to receive(:call).with(:latest_settings).and_return([:latest_tags])
 
-        crashtracker.start
+        expect(described_class).to receive(:_native_start_or_update_on_fork).with(
+          hash_including(tags_as_array: [:latest_tags])
+        )
+
+        crashtracker = build_crashtracker(logger: logger)
+
         crashtracker.update_on_fork
-
-        wait_for { `pgrep -f libdatadog-crashtracking-receiver`.lines.size }.to be 1
-
-        tear_down!
       end
     end
 
@@ -303,8 +236,8 @@ RSpec.describe Datadog::Core::Crashtracking::Component, skip: !CrashtrackingHelp
           crash_report_message = JSON.parse(crash_report[:message], symbolize_names: true)
 
           expect(crash_report_message[:metadata]).to include(
-            profiling_library_name: 'dd-trace-rb',
-            profiling_library_version: Datadog::VERSION::STRING,
+            library_name: 'dd-trace-rb',
+            library_version: Datadog::VERSION::STRING,
             family: 'ruby',
             tags: ['tag1:value1', 'tag2:value2'],
           )
@@ -313,32 +246,51 @@ RSpec.describe Datadog::Core::Crashtracking::Component, skip: !CrashtrackingHelp
         end
       end
 
-      context 'when forked' do
-        # This integration test coverages the case that
-        # the callback registered with `Utils::AtForkMonkeyPatch.at_fork`
-        # does not contain a stale instance of the crashtracker component.
-        it 'ensures the latest configuration applied' do
-          allow(described_class).to receive(:_native_start_or_update_on_fork)
+      context 'via unix domain socket' do
+        let(:temporary_directory) { Dir.mktmpdir }
+        let(:socket_path) { "#{temporary_directory}/rspec_unix_domain_socket" }
+        let(:unix_domain_socket) { UNIXServer.new(socket_path) } # Closing the socket is handled by webrick
+        let(:server) do
+          server = WEBrick::HTTPServer.new(
+            DoNotListen: true,
+            Logger: log,
+            AccessLog: access_log,
+            StartCallback: -> { init_signal.push(1) }
+          )
+          server.listeners << unix_domain_socket
+          server
+        end
+        let(:agent_base_url) { "unix://#{socket_path}" }
 
-          # `Datadog.configure` to trigger crashtracking component reinstantiation,
-          #  a callback is first registered with `Utils::AtForkMonkeyPatch.at_fork`,
-          #  but not with the second `Datadog.configure` invokation.
-          Datadog.configure do |c|
-            c.agent.host = 'example.com'
+        after do
+          FileUtils.remove_entry(temporary_directory)
+        rescue Errno::ENOENT => _e
+          # Do nothing, it's ok
+        end
+
+        it 'reports crashes via uds when app crashes with fiddle' do
+          fork_expectations = proc do |status:, stdout:, stderr:|
+            expect(Signal.signame(status.termsig)).to eq('SEGV').or eq('ABRT')
+            expect(stderr).to include('[BUG] Segmentation fault')
           end
 
-          Datadog.configure do |c|
-            c.agent.host = 'google.com'
+          expect_in_fork(fork_expectations: fork_expectations) do
+            crash_tracker = build_crashtracker(agent_base_url: agent_base_url)
+            crash_tracker.start
+
+            Fiddle.free(42)
           end
 
-          expect_in_fork do
-            expect(described_class).to have_received(:_native_start_or_update_on_fork).with(
-              hash_including(
-                action: :update_on_fork,
-                exporter_configuration: [:agent, 'http://google.com:9126/'],
-              )
-            )
-          end
+          crash_report = JSON.parse(request.body, symbolize_names: true)[:payload].first
+
+          expect(crash_report[:stack_trace]).to_not be_empty
+          expect(crash_report[:tags]).to include('signum:11', 'signame:SIGSEGV')
+
+          crash_report_message = JSON.parse(crash_report[:message], symbolize_names: true)
+
+          expect(crash_report_message[:metadata]).to_not be_empty
+          expect(crash_report_message[:files][:'/proc/self/maps']).to_not be_empty
+          expect(crash_report_message[:os_info]).to_not be_empty
         end
       end
     end

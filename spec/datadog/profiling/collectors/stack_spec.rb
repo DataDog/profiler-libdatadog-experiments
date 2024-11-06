@@ -17,9 +17,9 @@ RSpec.describe Datadog::Profiling::Collectors::Stack do
   let(:reference_stack) { convert_reference_stack(raw_reference_stack) }
   let(:gathered_stack) { stacks.fetch(:gathered) }
 
-  def sample(thread, recorder_instance, metric_values_hash, labels_array, max_frames: 400, in_gc: false)
+  def sample(thread, recorder_instance, metric_values_hash, labels_array, **options)
     numeric_labels_array = []
-    described_class::Testing._native_sample(thread, recorder_instance, metric_values_hash, labels_array, numeric_labels_array, max_frames, in_gc)
+    described_class::Testing._native_sample(thread, recorder_instance, metric_values_hash, labels_array, numeric_labels_array, **options)
   end
 
   # This spec explicitly tests the main thread because an unpatched rb_profile_frames returns one more frame in the
@@ -214,6 +214,37 @@ RSpec.describe Datadog::Profiling::Collectors::Stack do
       end
     end
 
+    context "when sampling a thread in gvl waiting state" do
+      let(:do_in_background_thread) do
+        proc do |ready_queue|
+          ready_queue << true
+          sleep
+        end
+      end
+
+      context "when the thread has cpu time" do
+        let(:metric_values) { {"cpu-time" => 123, "cpu-samples" => 456, "wall-time" => 789} }
+
+        it do
+          expect {
+            sample_and_decode(background_thread, :labels, is_gvl_waiting_state: true)
+          }.to raise_error(RuntimeError, /BUG: .* is_gvl_waiting/)
+        end
+      end
+
+      context "when the thread has wall time but no cpu time" do
+        let(:metric_values) { {"cpu-time" => 0, "cpu-samples" => 456, "wall-time" => 789} }
+
+        it do
+          expect(sample_and_decode(background_thread, :labels, is_gvl_waiting_state: true)).to include(state: "waiting for gvl")
+        end
+
+        it "takes precedence over approximate state categorization" do
+          expect(sample_and_decode(background_thread, :labels, is_gvl_waiting_state: false)).to include(state: "sleeping")
+        end
+      end
+    end
+
     describe "approximate thread state categorization based on current stack" do
       before do
         wait_for { background_thread.backtrace_locations.first.base_label }.to eq(expected_method_name)
@@ -273,6 +304,15 @@ RSpec.describe Datadog::Profiling::Collectors::Stack do
 
         it do
           expect(sample_and_decode(background_thread, :labels)).to include(state: "sleeping")
+        end
+
+        # See comment on sample_thread in collectors_stack.c for details of why we do this
+        context 'when wall_time is zero' do
+          let(:metric_values) { {"cpu-time" => 0, "cpu-samples" => 1, "wall-time" => 0} }
+
+          it do
+            expect(sample_and_decode(background_thread, :labels)).to include(state: "sleeping")
+          end
         end
       end
 
@@ -645,7 +685,7 @@ RSpec.describe Datadog::Profiling::Collectors::Stack do
   context "when trying to sample something which is not a thread" do
     it "raises a TypeError" do
       expect do
-        sample(:not_a_thread, build_stack_recorder, metric_values, labels)
+        sample(:not_a_thread, Datadog::Profiling::StackRecorder.for_testing, metric_values, labels)
       end.to raise_error(TypeError)
     end
   end
@@ -653,7 +693,7 @@ RSpec.describe Datadog::Profiling::Collectors::Stack do
   context "when max_frames is too small" do
     it "raises an ArgumentError" do
       expect do
-        sample(Thread.current, build_stack_recorder, metric_values, labels, max_frames: 4)
+        sample(Thread.current, Datadog::Profiling::StackRecorder.for_testing, metric_values, labels, max_frames: 4)
       end.to raise_error(ArgumentError)
     end
   end
@@ -661,7 +701,7 @@ RSpec.describe Datadog::Profiling::Collectors::Stack do
   context "when max_frames is too large" do
     it "raises an ArgumentError" do
       expect do
-        sample(Thread.current, build_stack_recorder, metric_values, labels, max_frames: 10_001)
+        sample(Thread.current, Datadog::Profiling::StackRecorder.for_testing, metric_values, labels, max_frames: 10_001)
       end.to raise_error(ArgumentError)
     end
   end
@@ -672,8 +712,8 @@ RSpec.describe Datadog::Profiling::Collectors::Stack do
     end
   end
 
-  def sample_and_decode(thread, data = :locations, max_frames: 400, recorder: build_stack_recorder, in_gc: false)
-    sample(thread, recorder, metric_values, labels, max_frames: max_frames, in_gc: in_gc)
+  def sample_and_decode(thread, data = :locations, recorder: Datadog::Profiling::StackRecorder.for_testing, **options)
+    sample(thread, recorder, metric_values, labels, **options)
 
     samples = samples_from_pprof(recorder.serialize!)
 

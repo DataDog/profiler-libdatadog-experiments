@@ -126,6 +126,18 @@ RSpec.describe Datadog::Tracing::Tracer do
             expect(span.get_tag('my')).to eq('tag')
           end
 
+          context 'contains version and span.service is not equal to the default tracer service' do
+            let(:tracer_options) { { default_service: 'global-service', tags: { version: '1.1.0' } } }
+            let(:service) { 'my-service' }
+            it 'does not set version on the span' do
+              expect(tracer.default_service).to eq('global-service')
+              expect(span.service).not_to eq('my-service')
+
+              expect(tracer.tags).to include(version: '1.1.0')
+              expect(span.tags).not_to include(:version)
+            end
+          end
+
           context 'and default tags are set on the tracer' do
             let(:tracer_options) { { tags: default_tags } }
 
@@ -750,7 +762,7 @@ RSpec.describe Datadog::Tracing::Tracer do
         tracer.trace('operation') do |span, trace|
           expect(trace).to have_attributes(
             origin: nil,
-            sampling_priority: 1
+            sampling_priority: nil
           )
 
           expect(span).to have_attributes(
@@ -793,7 +805,7 @@ RSpec.describe Datadog::Tracing::Tracer do
         tracer.trace('operation') do |span, trace|
           expect(trace).to have_attributes(
             origin: nil,
-            sampling_priority: 1
+            sampling_priority: nil
           )
 
           expect(span).to have_attributes(
@@ -874,7 +886,7 @@ RSpec.describe Datadog::Tracing::Tracer do
         tracer.trace('second') do |span, trace|
           expect(trace).to have_attributes(
             origin: nil,
-            sampling_priority: 1
+            sampling_priority: nil
           )
 
           expect(span.trace_id).to_not eq(digest.trace_id)
@@ -914,7 +926,7 @@ RSpec.describe Datadog::Tracing::Tracer do
         tracer.trace('operation') do |span, trace|
           expect(trace).to have_attributes(
             origin: nil,
-            sampling_priority: 1
+            sampling_priority: nil
           )
 
           expect(span).to have_attributes(

@@ -55,7 +55,7 @@ module ProfileHelpers
         sample.label.map do |it|
           key = string_table[it.key].to_sym
           [key, ((it.num == 0) ? string_table[it.str] : ProfileHelpers.maybe_fix_label_range(key, it.num))]
-        end.to_h,
+        end.sort.to_h,
       ).freeze
     end
   end
@@ -79,27 +79,21 @@ module ProfileHelpers
     end
   end
 
-  def samples_for_thread(samples, thread)
-    samples.select do |sample|
+  def samples_for_thread(samples, thread, expected_size: nil)
+    result = samples.select do |sample|
       thread_id = sample.labels[:"thread id"]
       thread_id && object_id_from(thread_id) == thread.object_id
     end
+
+    if expected_size
+      expect(result.size).to(be(expected_size), "Found unexpected sample count in result: #{result}")
+    end
+
+    result
   end
 
-  # We disable heap_sample collection by default in tests since it requires some extra mocking/
-  # setup for it to properly work.
-  def build_stack_recorder(
-    heap_samples_enabled: false, heap_size_enabled: false, heap_sample_every: 1,
-    timeline_enabled: false
-  )
-    Datadog::Profiling::StackRecorder.new(
-      cpu_time_enabled: true,
-      alloc_samples_enabled: true,
-      heap_samples_enabled: heap_samples_enabled,
-      heap_size_enabled: heap_size_enabled,
-      heap_sample_every: heap_sample_every,
-      timeline_enabled: timeline_enabled,
-    )
+  def sample_for_thread(samples, thread)
+    samples_for_thread(samples, thread, expected_size: 1).first
   end
 
   def self.maybe_fix_label_range(key, value)
@@ -109,6 +103,12 @@ module ProfileHelpers
       value + 2**64
     else
       value
+    end
+  end
+
+  def skip_if_gvl_profiling_not_supported(testcase)
+    if RUBY_VERSION < "3.2."
+      testcase.skip "GVL profiling is only supported on Ruby >= 3.2"
     end
   end
 end
