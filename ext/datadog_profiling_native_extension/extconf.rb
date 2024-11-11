@@ -1,8 +1,6 @@
 # rubocop:disable Style/StderrPuts
 # rubocop:disable Style/GlobalVars
 
-ENV["LIBDATADOG_VENDOR_OVERRIDE"] ||= Pathname.new("#{__dir__}/../../embedded-libdatadog/").expand_path.to_s
-
 require_relative "native_extension_helpers"
 require_relative "../libdatadog_extconf_helpers"
 
