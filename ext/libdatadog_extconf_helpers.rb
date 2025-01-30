@@ -3,6 +3,9 @@
 require 'rubygems'
 require 'pathname'
 
+# Enable libdatadog embedding
+ENV["LIBDATADOG_VENDOR_OVERRIDE"] ||= Pathname.new("#{__dir__}/../embedded-libdatadog/").expand_path.to_s
+
 module Datadog
   # Contains a bunch of shared helpers that get used during building of extensions that link to libdatadog
   module LibdatadogExtconfHelpers
