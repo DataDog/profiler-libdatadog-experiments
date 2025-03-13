@@ -207,6 +207,7 @@ struct ddog_prof_Profile_NewResult ddog_prof_Profile_new(struct ddog_prof_Slice_
 
 /**
  * Same as `ddog_profile_new` but also configures a `string_storage` for the profile.
+ * TODO: @ivoanjo Should this take a `*mut ManagedStringStorage` like Profile APIs do?
  */
 DDOG_CHECK_RETURN
 struct ddog_prof_Profile_NewResult ddog_prof_Profile_with_string_storage(struct ddog_prof_Slice_ValueType sample_types,
@@ -396,24 +397,68 @@ DDOG_CHECK_RETURN
 struct ddog_prof_Profile_Result ddog_prof_Profile_reset(struct ddog_prof_Profile *profile,
                                                         const struct ddog_Timespec *start_time);
 
-DDOG_CHECK_RETURN struct ddog_prof_ManagedStringStorage ddog_prof_ManagedStringStorage_new(void);
+DDOG_CHECK_RETURN
+struct ddog_prof_ManagedStringStorageNewResult ddog_prof_ManagedStringStorage_new(void);
 
+/**
+ * TODO: @ivoanjo Should this take a `*mut ManagedStringStorage` like Profile APIs do?
+ */
 void ddog_prof_ManagedStringStorage_drop(struct ddog_prof_ManagedStringStorage storage);
 
+/**
+ * TODO: @ivoanjo Should this take a `*mut ManagedStringStorage` like Profile APIs do?
+ */
 DDOG_CHECK_RETURN
 struct ddog_prof_ManagedStringStorageInternResult ddog_prof_ManagedStringStorage_intern(struct ddog_prof_ManagedStringStorage storage,
-                                                                                        const ddog_CharSlice *string);
+                                                                                        ddog_CharSlice string);
 
-DDOG_CHECK_RETURN
-struct ddog_prof_ManagedStringStorageResult ddog_prof_ManagedStringStorage_unintern(struct ddog_prof_ManagedStringStorage storage,
-                                                                                    uint32_t id);
+/**
+ * Interns all the strings in `strings`, writing the resulting id to the same
+ * offset in `output_ids`.
+ *
+ * This can fail if:
+ *  1. The given `output_ids_size` doesn't match the size of the input slice.
+ *  2. The internal storage pointer is null.
+ *  3. It fails to acquire a lock (e.g. it was poisoned).
+ *  4. Defensive checks against bugs fail.
+ *
+ * If a failure occurs, do not use any of the ids in the output array. After
+ * this point, you should only use read-only routines (except for drop) on
+ * the managed string storage.
+ * TODO: @ivoanjo Should this take a `*mut ManagedStringStorage` like Profile APIs do?
+ */
+ddog_prof_MaybeError ddog_prof_ManagedStringStorage_intern_all(struct ddog_prof_ManagedStringStorage storage,
+                                                               struct ddog_prof_Slice_CharSlice strings,
+                                                               struct ddog_prof_ManagedStringId *output_ids,
+                                                               uintptr_t output_ids_size);
 
-DDOG_CHECK_RETURN
-struct ddog_prof_StringWrapperResult ddog_prof_ManagedStringStorage_get_string(struct ddog_prof_ManagedStringStorage storage,
-                                                                               uint32_t id);
+/**
+ * TODO: @ivoanjo Should this take a `*mut ManagedStringStorage` like Profile APIs do?
+ */
+ddog_prof_MaybeError ddog_prof_ManagedStringStorage_unintern(struct ddog_prof_ManagedStringStorage storage,
+                                                             struct ddog_prof_ManagedStringId id);
 
+/**
+ * TODO: @ivoanjo Should this take a `*mut ManagedStringStorage` like Profile APIs do?
+ */
+ddog_prof_MaybeError ddog_prof_ManagedStringStorage_unintern_all(struct ddog_prof_ManagedStringStorage storage,
+                                                                 struct ddog_prof_Slice_ManagedStringId ids);
+
+/**
+ * Returns a string given its id.
+ * This API is mostly for testing, overall you should avoid reading back strings from libdatadog
+ * once they've been interned and should instead always operate on the id.
+ * Remember to `ddog_StringWrapper_drop` the string once you're done with it.
+ * TODO: @ivoanjo Should this take a `*mut ManagedStringStorage` like Profile APIs do?
+ */
 DDOG_CHECK_RETURN
-struct ddog_prof_ManagedStringStorageResult ddog_prof_ManagedStringStorage_advance_gen(struct ddog_prof_ManagedStringStorage storage);
+struct ddog_StringWrapperResult ddog_prof_ManagedStringStorage_get_string(struct ddog_prof_ManagedStringStorage storage,
+                                                                          struct ddog_prof_ManagedStringId id);
+
+/**
+ * TODO: @ivoanjo Should this take a `*mut ManagedStringStorage` like Profile APIs do?
+ */
+ddog_prof_MaybeError ddog_prof_ManagedStringStorage_advance_gen(struct ddog_prof_ManagedStringStorage storage);
 
 #ifdef __cplusplus
 }  // extern "C"
