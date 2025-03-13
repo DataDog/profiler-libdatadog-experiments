@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'datadog/tracing/contrib/rails/rails_helper'
 require 'datadog/appsec/contrib/support/integration/shared_examples'
 require 'datadog/appsec/spec_helper'
@@ -13,7 +15,7 @@ RSpec.describe 'Rails integration tests' do
   # In the future, it might be a good idea to use the traces that the mocked agent
   # receives in the tests/shared examples
   let(:agent_http_client) do
-    Datadog::Tracing::Transport::HTTP.default do |t|
+    Datadog::Tracing::Transport::HTTP.default(agent_settings: test_agent_settings) do |t|
       t.adapter agent_http_adapter
     end
   end

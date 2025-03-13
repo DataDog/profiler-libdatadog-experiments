@@ -15,6 +15,7 @@ require 'jruby' if RUBY_ENGINE == 'jruby'
 if (ENV['SKIP_SIMPLECOV'] != '1') && !RSpec.configuration.files_to_run.all? { |path| path.include?('/benchmark/') }
   # +SimpleCov.start+ must be invoked before any application code is loaded
   require 'simplecov'
+  require 'support/simplecov_fix'
   SimpleCov.start do
     formatter SimpleCov::Formatter::SimpleFormatter
   end
@@ -158,7 +159,7 @@ RSpec.configure do |config|
           # WEBrick server thread
           t[:WEBrickSocket] ||
           # Rails connection reaper
-          backtrace.find { |b| b.include?('lib/active_record/connection_adapters/abstract/connection_pool.rb') } ||
+          backtrace.find { |b| b =~ %r{lib/active_record/connection_adapters/abstract/connection_pool(/reaper)?.rb} } ||
           # Ruby JetBrains debugger
           (t.class.name && t.class.name.include?('DebugThread')) ||
           # Categorized as a known leaky thread
@@ -294,6 +295,7 @@ end
 
 # Helper matchers
 RSpec::Matchers.define_negated_matcher :not_be, :be
+RSpec::Matchers.define_negated_matcher :not_change, :change
 
 # The Ruby Timeout class uses a long-lived class-level thread that is never terminated.
 # Creating it early here ensures tests that tests that check for leaking threads are not
@@ -302,3 +304,8 @@ RSpec::Matchers.define_negated_matcher :not_be, :be
 # This has to be one once for the lifetime of this process, and was introduced in Ruby 3.1.
 # Before 3.1, a thread was created and destroyed on every Timeout#timeout call.
 Timeout.ensure_timeout_thread_created if Timeout.respond_to?(:ensure_timeout_thread_created)
+
+# Code tracking calls out to the current DI component, which may reference
+# mock objects in the test suite. Disable it and tests that need code tracking
+# will enable it back for themselves.
+Datadog::DI.deactivate_tracking! if defined?(Datadog::DI) && Datadog::DI.respond_to?(:deactivate_tracking!)

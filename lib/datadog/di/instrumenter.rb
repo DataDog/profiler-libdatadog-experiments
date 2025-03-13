@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-# rubocop:disable Lint/AssignmentInCondition
+require_relative '../core/utils/time'
 
-require 'benchmark'
+# rubocop:disable Lint/AssignmentInCondition
 
 module Datadog
   module DI
@@ -54,10 +54,11 @@ module Datadog
     #
     # @api private
     class Instrumenter
-      def initialize(settings, serializer, logger, code_tracker: nil)
+      def initialize(settings, serializer, logger, code_tracker: nil, telemetry: nil)
         @settings = settings
         @serializer = serializer
         @logger = logger
+        @telemetry = telemetry
         @code_tracker = code_tracker
 
         @lock = Mutex.new
@@ -66,6 +67,7 @@ module Datadog
       attr_reader :settings
       attr_reader :serializer
       attr_reader :logger
+      attr_reader :telemetry
       attr_reader :code_tracker
 
       # This is a substitute for Thread::Backtrace::Location
@@ -90,34 +92,88 @@ module Datadog
         cls = symbolize_class_name(probe.type_name)
         serializer = self.serializer
         method_name = probe.method_name
-        target_method = cls.instance_method(method_name)
-        loc = target_method.source_location
+        loc = begin
+          cls.instance_method(method_name).source_location
+        rescue NameError
+          # The target method is not defined.
+          # This could be because it will be explicitly defined later
+          # (since classes can be reopened in Ruby)
+          # or the method is virtual (provided by a method_missing handler).
+          # In these cases we do not have a source location for the
+          # target method here.
+        end
         rate_limiter = probe.rate_limiter
+        settings = self.settings
 
         mod = Module.new do
-          define_method(method_name) do |*args, **kwargs| # steep:ignore
+          define_method(method_name) do |*args, **kwargs, &target_block| # steep:ignore
             if rate_limiter.nil? || rate_limiter.allow?
               # Arguments may be mutated by the method, therefore
               # they need to be serialized prior to method invocation.
               entry_args = if probe.capture_snapshot?
-                serializer.serialize_args(args, kwargs)
+                serializer.serialize_args(args, kwargs,
+                  depth: probe.max_capture_depth || settings.dynamic_instrumentation.max_capture_depth,
+                  attribute_count: probe.max_capture_attribute_count || settings.dynamic_instrumentation.max_capture_attribute_count)
               end
-              rv = nil
-              duration = Benchmark.realtime do # steep:ignore
-                rv = super(*args, **kwargs)
+              start_time = Core::Utils::Time.get_time
+              # Under Ruby 2.6 we cannot just call super(*args, **kwargs)
+              # for methods defined via method_missing.
+              rv = if args.any?
+                if kwargs.any?
+                  super(*args, **kwargs, &target_block)
+                else
+                  super(*args, &target_block)
+                end
+              elsif kwargs.any?
+                super(**kwargs, &target_block)
+              else
+                super(&target_block)
               end
+              duration = Core::Utils::Time.get_time - start_time
               # The method itself is not part of the stack trace because
               # we are getting the stack trace from outside of the method.
               # Add the method in manually as the top frame.
-              method_frame = Location.new(loc.first, loc.last, method_name)
-              caller_locs = [method_frame] + caller_locations # steep:ignore
+              method_frame = if loc
+                [Location.new(loc.first, loc.last, method_name)]
+              else
+                # For virtual and lazily-defined methods, we do not have
+                # the original source location here, and they won't be
+                # included in the stack trace currently.
+                # TODO when begin/end trace points are added for local
+                # variable capture in method probes, we should be able
+                # to obtain actual method execution location and use
+                # that location here.
+                []
+              end
+              caller_locs = method_frame + caller_locations # steep:ignore
               # TODO capture arguments at exit
               # & is to stop steep complaints, block is always present here.
               block&.call(probe: probe, rv: rv, duration: duration, caller_locations: caller_locs,
                 serialized_entry_args: entry_args)
               rv
             else
-              super(*args, **kwargs)
+              # stop standard from trying to mess up my code
+              _ = 42
+
+              # The necessity to invoke super in each of these specific
+              # ways is very difficult to test.
+              # Existing tests, even though I wrote many, still don't
+              # cause a failure if I replace all of the below with a
+              # simple super(*args, **kwargs, &target_block).
+              # But, let's be safe and go through the motions in case
+              # there is actually a legitimate need for the breakdown.
+              # TODO figure out how to test this properly.
+              if args.any?
+                if kwargs.any?
+                  super(*args, **kwargs, &target_block)
+                else
+                  super(*args, &target_block)
+                end
+              elsif kwargs.any?
+                super(**kwargs, &target_block)
+              else
+                super(&target_block)
+              end
             end
           end
         end
@@ -172,12 +228,12 @@ module Datadog
         # we use mock objects and the methods may be mocked with
         # individual invocations, yielding different return values on
         # different calls to the same method.
-        permit_untargeted_trace_points = settings.dynamic_instrumentation.untargeted_trace_points
+        permit_untargeted_trace_points = settings.dynamic_instrumentation.internal.untargeted_trace_points
 
         iseq = nil
         if code_tracker
-          iseq = code_tracker.iseqs_for_path_suffix(probe.file).first # steep:ignore
-          unless iseq
+          ret = code_tracker.iseqs_for_path_suffix(probe.file) # steep:ignore
+          unless ret
             if permit_untargeted_trace_points
               # Continue withoout targeting the trace point.
               # This is going to cause a serious performance penalty for
@@ -189,11 +245,12 @@ module Datadog
               #
               # If the requested file is not in code tracker's registry,
               # or the code tracker does not exist at all,
-              # do not attempt to instrumnet now.
+              # do not attempt to instrument now.
               # The caller should add the line to the list of pending lines
               # to instrument and install the hook when the file in
               # question is loaded (and hopefully, by then code tracking
               # is active, otherwise the line will never be instrumented.)
+              raise_if_probe_in_loaded_features(probe)
               raise Error::DITargetNotDefined, "File not in code tracker registry: #{probe.file}"
             end
           end
@@ -201,7 +258,12 @@ module Datadog
           # Same as previous comment, if untargeted trace points are not
           # explicitly defined, and we do not have code tracking, do not
           # instrument the method.
+          raise_if_probe_in_loaded_features(probe)
           raise Error::DITargetNotDefined, "File not in code tracker registry: #{probe.file}"
+        end
+
+        if ret
+          actual_path, iseq = ret
         end
 
         # If trace point is not targeted, we only need one trace point per file.
@@ -216,19 +278,40 @@ module Datadog
         # overhead of targeted trace points is minimal, don't worry about
         # this optimization just yet and create a trace point for each probe.
 
-        tp = TracePoint.new(:line) do |tp|
-          # If trace point is not targeted, we must verify that the invocation
-          # is the file & line that we want, because untargeted trace points
-          # are invoked for *each* line of Ruby executed.
-          if iseq || tp.lineno == probe.line_no && probe.file_matches?(tp.path)
-            if rate_limiter.nil? || rate_limiter.allow?
-              # & is to stop steep complaints, block is always present here.
-              block&.call(probe: probe, trace_point: tp, caller_locations: caller_locations)
+        types = if iseq
+          # When targeting trace points we can target the 'end' line of a method.
+          # However, by adding the :return trace point we lose diagnostics
+          # for lines that contain no executable code (e.g. comments only)
+          # and thus cannot actually be instrumented.
+          [:line, :return, :b_return]
+        else
+          [:line]
+        end
+        tp = TracePoint.new(*types) do |tp|
+          begin
+            # If trace point is not targeted, we must verify that the invocation
+            # is the file & line that we want, because untargeted trace points
+            # are invoked for *each* line of Ruby executed.
+            # TODO find out exactly when the path in trace point is relative.
+            # Looks like this is the case when line trace point is not targeted?
+            if iseq || tp.lineno == probe.line_no && (
+              probe.file == tp.path || probe.file_matches?(tp.path)
+            )
+              if rate_limiter.nil? || rate_limiter.allow?
+                # & is to stop steep complaints, block is always present here.
+                block&.call(probe: probe, trace_point: tp, caller_locations: caller_locations)
+              end
             end
+          rescue => exc
+            raise if settings.dynamic_instrumentation.internal.propagate_all_exceptions
+            logger.debug { "di: unhandled exception in line trace point: #{exc.class}: #{exc}" }
+            telemetry&.report(exc, description: "Unhandled exception in line trace point")
+            # TODO test this path
           end
         rescue => exc
-          raise if settings.dynamic_instrumentation.propagate_all_exceptions
-          logger.warn("Unhandled exception in line trace point: #{exc.class}: #{exc}")
+          raise if settings.dynamic_instrumentation.internal.propagate_all_exceptions
+          logger.debug { "di: unhandled exception in line trace point: #{exc.class}: #{exc}" }
+          telemetry&.report(exc, description: "Unhandled exception in line trace point")
           # TODO test this path
         end
 
@@ -244,13 +327,17 @@ module Datadog
           end
 
           probe.instrumentation_trace_point = tp
+          # actual_path could be nil if we don't use targeted trace points.
+          probe.instrumented_path = actual_path
 
           if iseq
             tp.enable(target: iseq, target_line: line_no)
           else
             tp.enable
           end
+          # TracePoint#enable returns false when it succeeds.
         end
+        true
       end
 
       def unhook_line(probe)
@@ -269,7 +356,7 @@ module Datadog
           hook_line(probe, &block)
         else
           # TODO add test coverage for this path
-          logger.warn("Unknown probe type to hook: #{probe}")
+          logger.debug { "di: unknown probe type to hook: #{probe}" }
         end
       end
 
@@ -280,13 +367,33 @@ module Datadog
           unhook_line(probe)
         else
           # TODO add test coverage for this path
-          logger.warn("Unknown probe type to unhook: #{probe}")
+          logger.debug { "di: unknown probe type to unhook: #{probe}" }
         end
       end
 
       private
 
       attr_reader :lock
+
+      def raise_if_probe_in_loaded_features(probe)
+        return unless probe.file
+
+        # If the probe file is in the list of loaded files
+        # (as per $LOADED_FEATURES, using either exact or suffix match),
+        # raise an error indicating that
+        # code tracker is missing the loaded file because the file
+        # won't be loaded again (DI only works in production environments
+        # that do not normally reload code).
+        if $LOADED_FEATURES.include?(probe.file)
+          raise Error::DITargetNotInRegistry, "File loaded but is not in code tracker registry: #{probe.file}"
+        end
+        # Ths is an expensive check
+        $LOADED_FEATURES.each do |path|
+          if Utils.path_matches_suffix?(path, probe.file)
+            raise Error::DITargetNotInRegistry, "File matching probe path (#{probe.file}) was loaded and is not in code tracker registry: #{path}"
+          end
+        end
+      end
 
       # TODO test that this resolves qualified names e.g. A::B
       def symbolize_class_name(cls_name)

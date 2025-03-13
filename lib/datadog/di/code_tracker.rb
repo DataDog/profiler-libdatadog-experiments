@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+# rubocop:disable Lint/AssignmentInCondition
+
+require_relative 'error'
+
 module Datadog
   module DI
     # Tracks loaded Ruby code by source file and maintains a map from
@@ -76,6 +80,28 @@ module Datadog
               registry_lock.synchronize do
                 registry[path] = tp.instruction_sequence
               end
+
+              # Also, pending line probes should only be installed for
+              # non-eval'd code.
+              DI.current_component&.probe_manager&.install_pending_line_probes(path)
+            end
+          # Since this method normally is called from customer applications,
+          # rescue any exceptions that might not be handled to not break said
+          # customer applications.
+          rescue => exc
+            # Code tracker may be loaded without the rest of DI,
+            # in which case DI.component will not yet be defined,
+            # but we will have DI.current_component (set to nil).
+            if component = DI.current_component
+              raise if component.settings.dynamic_instrumentation.internal.propagate_all_exceptions
+              component.logger.debug { "di: unhandled exception in script_compiled trace point: #{exc.class}: #{exc}" }
+              component.telemetry&.report(exc, description: "Unhandled exception in script_compiled trace point")
+              # TODO test this path
+            else
+              # If we don't have a component, we cannot log anything properly.
+              # Do not just print a warning to avoid spamming customer logs.
+              # Don't reraise the exception either.
+              # TODO test this path
             end
           end
         end
@@ -112,15 +138,25 @@ module Datadog
       def iseqs_for_path_suffix(suffix)
         registry_lock.synchronize do
           exact = registry[suffix]
-          return [exact] if exact
+          return [suffix, exact] if exact
 
-          inexact = []
-          registry.each do |path, iseq|
-            if Utils.path_matches_suffix?(path, suffix)
-              inexact << iseq
+          suffix = suffix.dup
+          loop do
+            inexact = []
+            registry.each do |path, iseq|
+              if Utils.path_matches_suffix?(path, suffix)
+                inexact << [path, iseq]
+              end
             end
+            if inexact.length > 1
+              raise Error::MultiplePathsMatch, "Multiple paths matched requested suffix"
+            end
+            if inexact.any?
+              return inexact.first
+            end
+            return nil unless suffix.include?('/')
+            suffix.sub!(%r{.*/+}, '')
           end
-          inexact
         end
       end
 
@@ -164,3 +200,5 @@ module Datadog
     end
   end
 end
+
+# rubocop:enable Lint/AssignmentInCondition
